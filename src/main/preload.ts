@@ -21,6 +21,9 @@ const api = {
   toggleFullscreen: () => ipcRenderer.invoke('win:fullscreen'),
   setTitle: (t: string) => ipcRenderer.invoke('win:title', t),
   pathForFile: (f: File) => webUtils.getPathForFile(f),
+  /** command line of a second launch (single instance) */
+  onLaunchArgs: (cb: (a: { file?: string; reu?: number; reuImage?: string; sid2?: number; warp?: boolean; attachOnly?: boolean }) => void) =>
+    ipcRenderer.on('launch-args', (_e, a) => cb(a)),
 };
 
 contextBridge.exposeInMainWorld('host', api);

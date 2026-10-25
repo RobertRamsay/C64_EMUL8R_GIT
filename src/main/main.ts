@@ -7,6 +7,48 @@ import { join, basename, dirname } from 'node:path';
 let win: BrowserWindow | null = null;
 const settingsFile = () => join(app.getPath('userData'), 'settings.json');
 
+// ---------------------------------------------------------------- command line
+/** Launch options. VICE's spellings are accepted so tools that drive x64sc
+ *  (e.g. C64 Dev Machine) can pass the same arguments. */
+export interface LaunchArgs { file?: string; reu?: number; reuImage?: string; sid2?: number; warp?: boolean; attachOnly?: boolean }
+
+function parseArgs(argv: string[]): LaunchArgs {
+  const a: LaunchArgs = {};
+  const num = (s: string | undefined) => (s === undefined ? NaN : s.toLowerCase().startsWith('0x') || s.startsWith('$') ? parseInt(s.replace(/^\$|^0x/i, ''), 16) : parseInt(s, 10));
+  for (let i = 0; i < argv.length; i++) {
+    const t = argv[i];
+    const k = t.replace(/^--?/, '').toLowerCase();
+    if (!t.startsWith('-')) {
+      if (/\.(prg|p00|d64|g64|t64|tap|crt|sid|bin|c64s)$/i.test(t) && existsSync(t)) a.file = t;
+      continue;
+    }
+    switch (k) {
+      case 'autostart': if (argv[i + 1]) a.file = argv[++i]; break;
+      case 'attach': if (argv[i + 1]) { a.file = argv[++i]; a.attachOnly = true; } break;
+      case 'reu': if (a.reu === undefined) a.reu = 512; if (argv[i + 1] && /^\d+$/.test(argv[i + 1])) a.reu = num(argv[++i]); break;
+      case 'reusize': a.reu = num(argv[++i]); break;
+      case 'reuimage': case 'reu-image': a.reuImage = argv[++i]; if (a.reu === undefined) a.reu = 16384; break;
+      case 'sid2': case 'sid2address': a.sid2 = num(argv[++i]); break;
+      case 'warp': a.warp = true; break;
+      default: break; // unknown VICE options (e.g. -sidextra 1) are ignored
+    }
+  }
+  return a;
+}
+const cliArgs = () => parseArgs(process.argv.slice(app.isPackaged ? 1 : 2));
+
+// One window: launching again (e.g. after every build) hands the file to the
+// running emulator instead of starting a second copy.
+if (!process.env.C64EMUL8R_CAPTURE && !app.requestSingleInstanceLock()) app.quit();
+app.on('second-instance', (_e, argv) => {
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  const args = parseArgs(argv.slice(app.isPackaged ? 1 : 2));
+  win.webContents.send('launch-args', args);
+});
+
 function createWindow(): void {
   win = new BrowserWindow({
     width: 1400, height: 900, minWidth: 800, minHeight: 600,
@@ -56,6 +98,11 @@ const ROM_SIZES: Record<string, number[]> = { basic: [8192], kernal: [8192], cha
 
 function viceDirs(): string[] {
   const out: string[] = [];
+  // Bundled with C64 Dev Machine: <dm>/c64emul8r/C64EMUL8R.exe next to <dm>/vice/win
+  if (app.isPackaged) {
+    const dm = dirname(dirname(process.execPath));
+    out.push(join(dm, 'vice', 'win'), join(dm, 'vice'));
+  }
   const roots = ['C:/Program Files', 'C:/Program Files (x86)', join(app.getPath('home'), 'Desktop'), join(app.getPath('home'), 'Downloads'), 'C:/'];
   for (const root of roots) {
     let entries: string[] = [];
@@ -161,7 +208,7 @@ ipcMain.handle('dir:list', async (_e, p: string) => {
 ipcMain.handle('path:join', (_e, ...parts: string[]) => join(...parts));
 ipcMain.handle('path:dirname', (_e, p: string) => dirname(p));
 ipcMain.handle('app:home', () => app.getPath('home'));
-ipcMain.handle('app:args', () => process.argv.slice(app.isPackaged ? 1 : 2).filter((a) => !a.startsWith('-') && a !== '.'));
+ipcMain.handle('app:args', () => cliArgs());
 
 // ---------------------------------------------------------------- settings
 ipcMain.handle('settings:load', async () => {
@@ -175,5 +222,9 @@ ipcMain.handle('settings:save', async (_e, s: unknown) => {
 ipcMain.handle('win:fullscreen', () => { if (win) win.setFullScreen(!win.isFullScreen()); });
 ipcMain.handle('win:title', (_e, t: string) => { win?.setTitle(t); });
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  // Let other tools (C64 Dev Machine) find the installed executable.
+  if (app.isPackaged) fs.writeFile(join(app.getPath('userData'), 'install-path.txt'), process.execPath).catch(() => {});
+});
 app.on('window-all-closed', () => app.quit());

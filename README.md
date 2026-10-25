@@ -9,6 +9,24 @@ npm install
 npm start
 ```
 
+`npm run package` builds a standalone Windows app in `release/C64EMUL8R-win32-x64/C64EMUL8R.exe`. On start the packaged app writes its location to `%APPDATA%\c64emul8r\install-path.txt` so other tools can find it.
+
+### Command line
+C64EMUL8R accepts VICE's x64sc options, so tools that drive VICE can use it unchanged:
+
+```bash
+C64EMUL8R.exe -reu -reusize 16384 -reuimage data.reu -sidextra 1 -sid2address 0xd420 -autostart game.d64
+```
+
+It runs as a single window. Launching it again hands the new file to the running emulator, which resets and autostarts it. That makes the edit → build → run loop quick.
+
+### C64 Dev Machine
+C64EMUL8R ships inside C64 Dev Machine next to VICE. `npm run bundle:devmachine` packages it and copies it into the Dev Machine project as Included Files (`datafiles/c64emul8r`), so every Dev Machine build carries it. The bundled copy reads its ROMs from the Dev Machine's own VICE folder. Pass a different project path with `node tools/bundle-devmachine.mjs <path>`. The Dev Machine repo stores the bundle with Git LFS because `C64EMUL8R.exe` is over GitHub's 100 MB file limit. Run the command again after an emulator change.
+
+In C64 Dev Machine, **OPTIONS → EMULATOR** switches between VICE (the default) and C64EMUL8R for F5 / Build & Run and the RUN FILE panel. The Dev Machine uses the bundled copy unless `[emulator] c64emul8r_path` in `c64devmachine.ini` overrides it. Without a bundled copy, it falls back to the recorded install path, then to a file picker.
+
+Exported `_run.bat` launchers always use VICE.
+
 `npm test` runs the headless smoke tests: boot, BASIC, PRG autostart, fast-drive save/load/directory, and true-1541 load/save.
 
 ### ROMs

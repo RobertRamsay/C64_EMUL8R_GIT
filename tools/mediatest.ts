@@ -93,6 +93,8 @@ function runOne(path: string, seconds: number, outDir: string, idx: number): Res
     const frames = Math.round(seconds * c.fps);
     let maxAudio = 0;
     for (let f = 0; f < frames; f++) {
+      // only the last frames are looked at: skip pixel output before that (timing stays exact)
+      c.setFastForward(kind !== 'sid', f >= frames - 3);
       const r = c.runFrame();
       if (r && r.kind === 'jam') { note += ` | CPU JAM at $${r.addr.toString(16)}`; ok = false; break; }
       const a = c.takeAudio().left;

@@ -741,7 +741,10 @@ export class C64 implements CpuBus, VicMemory {
       this.ram[0xae] = end & 0xff; this.ram[0xaf] = end >> 8;
       if (run) this.typeText('RUN\n');
     } else if (run) {
-      this.typeText(`SYS${load}\n`);
+      // Self-starting loaders overwrite the BASIC idle vector ($0302); an
+      // empty RETURN sends BASIC back to its main loop, which jumps through it.
+      if (load <= 0x0302 && end > 0x0303) this.typeText('\n');
+      else this.typeText(`SYS${load}\n`);
     }
     this.onLog(`Loaded PRG $${load.toString(16).padStart(4, '0')}-$${end.toString(16).padStart(4, '0')}`);
     return load;
