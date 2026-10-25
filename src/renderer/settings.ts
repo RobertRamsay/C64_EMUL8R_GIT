@@ -3,6 +3,7 @@
 import type { C64Key } from '../core/keyboard';
 import type { SidModel } from '../core/sid';
 import type { HostApi } from '../main/preload';
+import type { BlendMode } from './video';
 
 declare global { interface Window { host: HostApi } }
 
@@ -37,7 +38,7 @@ export interface Settings {
     uci: boolean;
   };
   romDir: string;
-  video: { palette: string; scale: number; scanlines: number; border: 'full' | 'normal' | 'none'; smoothing: boolean };
+  video: { palette: string; scale: number; scanlines: number; border: 'full' | 'normal' | 'none'; smoothing: boolean; blend: BlendMode };
   audio: { volume: number; enabled: boolean; latencyMs: number; sidQuality: 'resample' | 'fast' };
   input: {
     keyMode: 'symbolic' | 'positional';
@@ -53,7 +54,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   machine: { video: 'PAL', sidModel: '6581', sid2Address: 0, sid2Model: '8580', reuSize: 0, turbo: 1, trueDrive: true, autoWarp: true, uci: true },
   romDir: '',
-  video: { palette: 'Colodore', scale: 0, scanlines: 25, border: 'normal', smoothing: false },
+  video: { palette: 'Colodore', scale: 0, scanlines: 25, border: 'normal', smoothing: false, blend: 'none' },
   audio: { volume: 70, enabled: true, latencyMs: 60, sidQuality: 'resample' },
   input: {
     keyMode: 'symbolic',

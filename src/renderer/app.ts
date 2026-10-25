@@ -60,8 +60,8 @@ export class App {
     this.bindEvents();
     await this.loadRoms();
     requestAnimationFrame(this.tick);
-    const args: string[] = await window.host.args();
-    if (args[0]) this.openPath(args[0], true);
+    this.handleLaunch(await window.host.args());
+    window.host.onLaunchArgs((a) => this.handleLaunch(a));
   }
 
   // --------------------------------------------------------------- ROMs
@@ -125,6 +125,7 @@ export class App {
     const s = this.settings.video;
     this.video.setPalette(this.palettes[s.palette] ?? PALETTES.Colodore);
     this.video.scale = s.scale;
+    this.video.blend = s.blend;
     const m = this.c64.vic.model;
     this.video.setGeometry(s.border, m.visibleLines, m.firstVisibleLine);
     document.getElementById('screen')!.classList.toggle('smooth', s.smoothing);
@@ -276,6 +277,23 @@ export class App {
     const f = await window.host.openFile({ filters, defaultPath: this.settings.ui.lastDir || undefined });
     if (!f) return;
     this.attach(f.name, f.data, autostart, f.path);
+  }
+
+  /** Options from the command line or a second launch (VICE-style or our own). */
+  async handleLaunch(a: { file?: string; reu?: number; reuImage?: string; sid2?: number; warp?: boolean; attachOnly?: boolean }): Promise<void> {
+    if (!a) return;
+    // session overrides: they apply until settings are changed, and are not saved
+    if (a.reu !== undefined) this.c64.applyConfig({ reuSize: a.reu });
+    if (a.sid2 !== undefined) this.c64.applyConfig({ sid2Address: a.sid2 });
+    if (a.reuImage && this.c64.reu) {
+      try {
+        const img: Uint8Array = await window.host.readFile(a.reuImage);
+        this.c64.reu.ram.set(img.subarray(0, this.c64.reu.ram.length));
+      } catch (e) { toast('Cannot read REU image: ' + (e as Error).message, true); }
+    }
+    if (a.warp) this.setWarp(true);
+    this.updateStatus();
+    if (a.file) await this.openPath(a.file, !a.attachOnly);
   }
 
   async openPath(path: string, autostart: boolean): Promise<void> {

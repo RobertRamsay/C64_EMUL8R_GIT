@@ -110,6 +110,8 @@ const renderers: Record<Page, (app: App, el: HTMLElement) => void | (() => void)
       field('Scale', select(v.scale, [[0, 'Fit window'], [1, '1×'], [2, '2×'], [3, '3×'], [4, '4×']], (x) => { v.scale = x; apply(); })),
       field('Scanlines', range(v.scanlines, 0, 80, (x) => { v.scanlines = x; apply(); }, '%')),
       field('Smoothing', checkbox(v.smoothing, 'Bilinear filtering instead of sharp pixels', (x) => { v.smoothing = x; apply(); })),
+      field('Pixel blend', select(v.blend, [['none', 'Off (square pixels)'], ['ang', 'ANG (diagonal edges)'], ['arc', 'ARC (rounded edges)'], ['scale2x', 'SCALE 2X (Scale2x)']], (x) => { v.blend = x; apply(); }),
+        'Smooths staircase edges using the extra screen pixels. Only active when the screen is shown at 2× native size or larger.'),
     );
     const prev = h('div', { class: 'row', style: 'margin-top:10px' });
     const renderPreview = () => {
