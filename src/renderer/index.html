@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:">
+  <title>C64EMUL8R</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app" class="no-debug">
+    <header id="toolbar">
+      <div class="brand"><span class="brand-c64">C64</span><span class="brand-emu">EMUL8R</span></div>
+      <nav class="tb-group" id="tb-main"></nav>
+      <div class="tb-spacer"></div>
+      <nav class="tb-group" id="tb-right"></nav>
+    </header>
+
+    <main id="workspace">
+      <section id="screen-pane">
+        <div id="screen-wrap" tabindex="0">
+          <canvas id="screen" width="384" height="272"></canvas>
+          <div id="scanlines"></div>
+          <canvas id="ultimate-canvas" width="320" height="200" hidden></canvas>
+          <div id="pause-badge" hidden>PAUSED</div>
+          <div id="drop-overlay" hidden><div>Drop to autostart</div></div>
+        </div>
+        <div id="welcome" hidden></div>
+      </section>
+
+      <aside id="dbg-right" class="dbg">
+        <div class="panel" id="panel-cpu"></div>
+        <div class="panel grow" id="panel-disasm"></div>
+        <div class="panel tabs" id="panel-right-tabs"></div>
+      </aside>
+
+      <section id="dbg-bottom" class="dbg">
+        <div class="panel tabs grow" id="panel-bottom-tabs"></div>
+      </section>
+    </main>
+
+    <footer id="statusbar">
+      <span id="st-state" class="st-pill">STOPPED</span>
+      <span id="st-media"></span>
+      <span class="tb-spacer"></span>
+      <span id="st-drive" title="1541 drive: LED / track"><i class="led"></i><span>8: --</span></span>
+      <span id="st-tape" title="Datasette"></span>
+      <span id="st-joy" title="Joystick ports (Ctrl+J swaps)"></span>
+      <span id="st-speed" title="Emulation speed"></span>
+      <span id="st-model"></span>
+    </footer>
+  </div>
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+release/
+*.log
+# Commodore ROMs are copyrighted - never commit them
+roms/
+*.rom
