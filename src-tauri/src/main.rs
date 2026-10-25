@@ -417,6 +417,29 @@ fn capture_eval(window: WebviewWindow, code: String) -> Result<(), String> {
 fn capture_quit(app: AppHandle) { app.exit(0); }
 
 // ---------------------------------------------------------------- startup
+/// Tauri only sets the window's small icon (title bar). The taskbar and Alt+Tab
+/// use the big one and otherwise show a generic icon, so set it from the icon
+/// tauri-build embedded in the exe, sized for the window's DPI.
+#[cfg(windows)]
+fn set_taskbar_icon(window: &WebviewWindow) {
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{LoadImageW, SendMessageW, ICON_BIG, IMAGE_ICON, WM_SETICON};
+    let Ok(hwnd) = window.hwnd() else { return };
+    let hwnd = hwnd.0 as windows_sys::Win32::Foundation::HWND;
+    unsafe {
+        let dpi = GetDpiForWindow(hwnd).max(96);
+        let size = (32 * dpi / 96) as i32;
+        let id = tauri_utils_icon_id() as usize as *const u16;
+        let icon = LoadImageW(GetModuleHandleW(std::ptr::null()), id, IMAGE_ICON, size, size, 0);
+        if !icon.is_null() { SendMessageW(hwnd, WM_SETICON, ICON_BIG as usize, icon as isize); }
+    }
+}
+
+/// The resource ID tauri-build gives the app icon (tauri_utils WINDOWS_APP_ICON_RESOURCE_ID).
+#[cfg(windows)]
+const fn tauri_utils_icon_id() -> u16 { 32512 }
+
 fn send_launch(app: &AppHandle, a: LaunchArgs) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();
@@ -440,6 +463,8 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(Shell::default())
         .setup(|app| {
+            #[cfg(windows)]
+            if let Some(w) = app.get_webview_window("main") { set_taskbar_icon(&w); }
             // Let other tools (C64 Dev Machine) find the installed executable.
             if is_packaged() {
                 if let Ok(exe) = std::env::current_exe() {
