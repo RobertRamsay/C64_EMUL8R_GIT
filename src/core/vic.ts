@@ -233,6 +233,15 @@ export class VICII {
     // border + pixel output (uses graphics decoded in previous cycles)
     this.renderCycle(c);
 
+    // MC is loaded from MCBASE in the first phase of cycle 58, before sprite 0's
+    // p/s-accesses (PAL cycle 58), so a sprite starting this line fetches row 0
+    if (c === 58) {
+      for (let i = 0; i < 8; i++) {
+        this.spMc[i] = this.spMcBase[i];
+        if (this.spDma[i] && this.spY[i] === (this.raster & 0xff)) this.spDisplay[i] = 1;
+      }
+    }
+
     // sprite pointer + data accesses
     const pcs = m.spritePCycle;
     for (let i = 0; i < 8; i++) {
@@ -274,10 +283,6 @@ export class VICII {
         this.spLineFetched.set(this.spFetched);
         break;
       case 58:
-        for (let i = 0; i < 8; i++) {
-          this.spMc[i] = this.spMcBase[i];
-          if (this.spDma[i] && this.spY[i] === (this.raster & 0xff)) this.spDisplay[i] = 1;
-        }
         if (this.rc === 7) {
           this.vcBase = this.vc;
           if (!this.badline) this.displayState = false;
