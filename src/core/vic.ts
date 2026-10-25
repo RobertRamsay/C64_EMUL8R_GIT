@@ -169,10 +169,14 @@ export class VICII {
         break;
       case 0x11:
       case 0x12: {
+        const prev = this.rasterCompare;
         this.rasterCompare = (this.regs[0x12]) | ((this.regs[0x11] & 0x80) << 1);
         if (this.raster === 0x30 && (this.regs[0x11] & 0x10)) this.denLatched = true;
         this.updateBadline();
-        if (this.raster === this.rasterCompare) this.raiseIrq(0x01);
+        // the IRQ fires when raster and compare *become* equal: moving the compare
+        // onto the current line triggers it, rewriting $D011/$D012 with the same
+        // compare (e.g. setting YSCROLL inside the raster IRQ) does not
+        if (this.rasterCompare !== prev && this.raster === this.rasterCompare) this.raiseIrq(0x01);
         break;
       }
       case 0x17:
