@@ -42,7 +42,7 @@ const [outDir] = await packager({
   out: join(root, 'release'),
   overwrite: true,
   prune: true,
-  ignore: [/^\/src/, /^\/tools/, /^\/release/, /^\/build/, /\.map$/, /^\/dist\/tests/, /^\/tsconfig\.json/, /^\/README\.md/, /^\/\.git/],
+  ignore: [/^\/src/, /^\/tools/, /^\/assets/, /^\/release/, /^\/build/, /\.map$/, /^\/dist\/tests/, /^\/tsconfig\.json/, /^\/README\.md/, /^\/\.git/],
   appBundleId: 'com.polytricity.c64emul8r',
   appCategoryType: 'public.app-category.developer-tools',
   appVersion: pkg.version,
@@ -64,6 +64,12 @@ if (sign) {
   if (notarize) run('spctl', ['--assess', '--type', 'execute', '--verbose', app]);
 }
 
+// Zip of the (stapled) app for the Mac Dev Machine to bundle and unpack.
+// ditto keeps the framework symlinks and the signature intact.
+const zip = join(root, 'release', `C64EMUL8R-${pkg.version}-mac-${arch}.zip`);
+rmSync(zip, { force: true });
+run('ditto', ['-c', '-k', '--keepParent', app, zip]);
+
 // DMG: the app plus an Applications link to drag it onto.
 const dmg = join(root, 'release', `C64EMUL8R-${pkg.version}-mac-${arch}.dmg`);
 const stage = join(root, 'release', 'dmg-stage');
@@ -83,4 +89,4 @@ if (sign) {
     run('spctl', ['--assess', '--type', 'open', '--context', 'context:primary-signature', '--verbose', dmg]);
   }
 }
-console.log(`\n${notarize ? 'notarized' : sign ? 'signed (not notarized)' : 'UNSIGNED'}: ${dmg}`);
+console.log(`\n${notarize ? 'notarized' : sign ? 'signed (not notarized)' : 'UNSIGNED'}: ${dmg}\napp zip: ${zip}`);

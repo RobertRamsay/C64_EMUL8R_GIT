@@ -34,7 +34,7 @@ C64EMUL8R ships inside C64 Dev Machine next to VICE. `npm run bundle:devmachine`
 
 In C64 Dev Machine, **OPTIONS → EMULATOR** switches between VICE (the default) and C64EMUL8R for F5 / Build & Run and the RUN FILE panel. The Dev Machine uses the bundled copy unless `[emulator] c64emul8r_path` in `c64devmachine.ini` overrides it. Without a bundled copy, it falls back to the recorded install path, then to a file picker.
 
-On macOS the emulator is a separate app: install `C64EMUL8R.app` in `/Applications` (or `~/Applications`). The Mac Dev Machine finds it there or through the recorded install path, and passes its bundled VICE ROM folder with `-directory`.
+The Mac Dev Machine bundles it too, as one zip of the signed app. On a Mac, `npm run bundle:devmachine-mac` runs `package:mac`, then copies `release/C64EMUL8R-<version>-mac-<arch>.zip` into the Mac Dev Machine project as `datafiles/c64emul8r/C64EMUL8R-mac.zip` and lists it in the `.yyp`. Pass a different project path with `node tools/bundle-devmachine-mac.mjs <path>` or `C64DM_MAC_DIR`. The zip is over 100 MB, so commit it with Git LFS installed (`brew install git-lfs`, then `git lfs install`). The first time C64EMUL8R is picked, the Dev Machine unpacks the zip into its own support folder. It unpacks again when a different zip ships. It passes its bundled VICE ROM folder with `-directory`. A zip keeps the app's framework symlinks and signature intact, which loose Included Files would not. Without a bundled zip, the Mac Dev Machine falls back to `C64EMUL8R.app` in `/Applications`, `~/Applications` or the recorded install path, then to a file picker.
 
 Exported `_run.bat` launchers always use VICE.
 

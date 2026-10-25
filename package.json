@@ -15,7 +15,8 @@
     "package": "node build.mjs && electron-packager . C64EMUL8R --platform=win32 --arch=x64 --icon=build/icon.ico --out=release --overwrite --prune=true --ignore=^/src --ignore=^/tools --ignore=^/assets --ignore=^/release --ignore=\\.map$ --ignore=^/dist/tests --ignore=^/build --ignore=^/tsconfig\\.json --ignore=^/README\\.md --ignore=^/\\.git",
     "package:mac": "node build.mjs && node tools/package-mac.mjs",
     "icons": "electron tools/make-icons.mjs",
-    "bundle:devmachine": "npm run package && node tools/bundle-devmachine.mjs"
+    "bundle:devmachine": "npm run package && node tools/bundle-devmachine.mjs",
+    "bundle:devmachine-mac": "npm run package:mac && node tools/bundle-devmachine-mac.mjs"
   },
   "devDependencies": {
     "@electron/packager": "^18.3.6",
