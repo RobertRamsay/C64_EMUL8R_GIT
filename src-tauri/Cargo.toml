@@ -19,6 +19,9 @@ regex = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_LibraryLoader", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging"] }
+# Same versions as Tauri's wry, to reach the WebView2 settings it doesn't expose
+webview2-com = "0.39"
+windows-core = "0.62"
 
 # No C++ compiler needed: see patches/vswhom/src/lib.rs
 [patch.crates-io]

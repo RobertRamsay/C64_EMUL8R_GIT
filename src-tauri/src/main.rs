@@ -136,6 +136,13 @@ fn rom_patterns() -> Vec<(&'static str, Regex, &'static [u64])> {
     ]
 }
 
+/// VICE 3.6+ keeps every KERNAL and character set side by side by part number
+/// (kernal-251104-04.bin is the SX-64's), so try the standard C64 ones first.
+fn rom_rank(name: &str) -> u8 {
+    let n = name.to_lowercase();
+    if ["901227-03", "901226-01", "901225-01", "325302-01+901229-05"].iter().any(|p| n.contains(p)) { 0 } else { 1 }
+}
+
 fn read_names(d: &Path) -> Vec<String> {
     match fs::read_dir(d) {
         Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect(),
@@ -191,7 +198,9 @@ fn vice_dirs(app: &AppHandle) -> Vec<PathBuf> {
 fn find_roms_in(dir: &Path, pats: &[(&'static str, Regex, &'static [u64])]) -> BTreeMap<String, String> {
     let mut found = BTreeMap::new();
     for d in [dir.to_path_buf(), dir.join("C64"), dir.join("DRIVES"), dir.join("roms"), dir.join("ROM")] {
-        for name in read_names(&d) {
+        let mut names = read_names(&d);
+        names.sort_by_key(|n| rom_rank(n));
+        for name in names {
             for (kind, re, sizes) in pats {
                 if found.contains_key(*kind) || !re.is_match(&name) { continue; }
                 let p = d.join(&name);
@@ -436,6 +445,20 @@ fn set_taskbar_icon(window: &WebviewWindow) {
     }
 }
 
+/// WebView2's browser shortcuts take keys before the page sees them: F12 opens
+/// DevTools instead of the debugger, and Ctrl+P/F/R print, find and reload.
+/// Turn them off; Ctrl+Shift+F12 still opens DevTools through toggle_devtools.
+#[cfg(windows)]
+fn disable_browser_keys(window: &WebviewWindow) {
+    let _ = window.with_webview(|wv| unsafe {
+        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+        use windows_core::Interface;
+        let Ok(core) = wv.controller().CoreWebView2() else { return };
+        let Ok(settings) = core.Settings() else { return };
+        if let Ok(s3) = settings.cast::<ICoreWebView2Settings3>() { let _ = s3.SetAreBrowserAcceleratorKeysEnabled(false); }
+    });
+}
+
 /// The resource ID tauri-build gives the app icon (tauri_utils WINDOWS_APP_ICON_RESOURCE_ID).
 #[cfg(windows)]
 const fn tauri_utils_icon_id() -> u16 { 32512 }
@@ -464,7 +487,7 @@ fn main() {
         .manage(Shell::default())
         .setup(|app| {
             #[cfg(windows)]
-            if let Some(w) = app.get_webview_window("main") { set_taskbar_icon(&w); }
+            if let Some(w) = app.get_webview_window("main") { set_taskbar_icon(&w); disable_browser_keys(&w); }
             // Let other tools (C64 Dev Machine) find the installed executable.
             if is_packaged() {
                 if let Ok(exe) = std::env::current_exe() {

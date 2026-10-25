@@ -114,6 +114,9 @@ const ROM_PATTERNS: Record<string, RegExp> = {
   dos1541: /^(dos1541|d1541ii|1541|dos1541[-_. ].*|.*325302-01.*|.*901229-0[3-6].*)(\.bin|\.rom)?$/i,
 };
 const ROM_SIZES: Record<string, number[]> = { basic: [8192], kernal: [8192], chargen: [4096], dos1541: [16384, 32768] };
+// VICE 3.6+ keeps every KERNAL and character set side by side by part number
+// (kernal-251104-04.bin is the SX-64's), so try the standard C64 ones first.
+const ROM_PREFERRED = /901227-03|901226-01|901225-01|325302-01\+901229-05/i;
 
 /** Where a macOS app bundle keeps ROMs: VICE under share/vice, C64 Dev Machine
  *  under vice (its Included Files), older VICE builds under ROM. */
@@ -153,6 +156,7 @@ async function findRomsIn(dir: string): Promise<Record<string, string>> {
   for (const d of search) {
     let entries: string[] = [];
     try { entries = readdirSync(d); } catch { continue; }
+    entries.sort((a, b) => Number(!ROM_PREFERRED.test(a)) - Number(!ROM_PREFERRED.test(b)));
     for (const name of entries) {
       for (const [kind, re] of Object.entries(ROM_PATTERNS)) {
         if (found[kind] || !re.test(name)) continue;
