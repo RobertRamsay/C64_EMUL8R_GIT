@@ -17,6 +17,8 @@
     "icons": "electron tools/make-icons.mjs",
     "bundle:devmachine": "npm run package && node tools/bundle-devmachine.mjs",
     "bundle:devmachine-mac": "npm run package:mac && node tools/bundle-devmachine-mac.mjs",
+    "package:mac-tauri": "node tools/package-mac.mjs --tauri",
+    "bundle:devmachine-mac-tauri": "npm run package:mac-tauri && node tools/bundle-devmachine-mac.mjs --tauri",
     "tauri:build": "node tools/tauri.mjs build --no-bundle",
     "tauri:dev": "node tools/tauri.mjs dev",
     "bundle:devmachine-tauri": "npm run tauri:build && node tools/bundle-devmachine.mjs --tauri"
