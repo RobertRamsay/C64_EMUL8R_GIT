@@ -16,10 +16,14 @@
     "package:mac": "node build.mjs && node tools/package-mac.mjs",
     "icons": "electron tools/make-icons.mjs",
     "bundle:devmachine": "npm run package && node tools/bundle-devmachine.mjs",
-    "bundle:devmachine-mac": "npm run package:mac && node tools/bundle-devmachine-mac.mjs"
+    "bundle:devmachine-mac": "npm run package:mac && node tools/bundle-devmachine-mac.mjs",
+    "tauri:build": "node tools/tauri.mjs build --no-bundle",
+    "tauri:dev": "node tools/tauri.mjs dev",
+    "bundle:devmachine-tauri": "npm run tauri:build && node tools/bundle-devmachine.mjs --tauri"
   },
   "devDependencies": {
     "@electron/packager": "^18.3.6",
+    "@tauri-apps/cli": "^2.12.4",
     "@types/node": "^22.10.2",
     "electron": "^33.2.1",
     "esbuild": "^0.24.2",

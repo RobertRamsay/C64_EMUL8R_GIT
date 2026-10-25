@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The emulator window: core events and the webview drag-and-drop listener",
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:default"]
+}

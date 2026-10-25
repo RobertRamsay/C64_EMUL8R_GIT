@@ -1,27 +1,36 @@
 // Copies the packaged emulator into C64 Dev Machine as GameMaker Included
 // Files (datafiles/c64emul8r), next to the bundled VICE, and lists them in
-// the .yyp. Run `npm run package` first.
+// the .yyp. Run `npm run package` first, or `npm run tauri:build` with --tauri
+// (the Tauri build is the single C64EMUL8R.exe).
 //
-//   node tools/bundle-devmachine.mjs [path/to/C64DevMachine_GIT]
+//   node tools/bundle-devmachine.mjs [--tauri] [path/to/C64DevMachine_GIT]
 
-import { cpSync, existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const args = process.argv.slice(2);
+const tauri = args.includes('--tauri');
+const dmArg = args.find((a) => !a.startsWith('--'));
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const src = join(root, 'release', 'C64EMUL8R-win32-x64');
-const dm = resolve(process.argv[2] ?? process.env.C64DM_DIR ?? join(root, '..', '..', 'C64DevMachine_GIT'));
+const src = tauri ? join(root, 'src-tauri', 'target', 'release') : join(root, 'release', 'C64EMUL8R-win32-x64');
+const dm = resolve(dmArg ?? process.env.C64DM_DIR ?? join(root, '..', '..', 'C64DevMachine_GIT'));
 const proj = join(dm, 'C64DevMachine_win.yyp');
 const yyp = join(proj, 'C64DevMachine_win.yyp');
 const dest = join(proj, 'datafiles', 'c64emul8r');
 
-if (!existsSync(join(src, 'C64EMUL8R.exe'))) throw new Error(`no packaged build in ${src} - run npm run package`);
+if (!existsSync(join(src, 'C64EMUL8R.exe'))) throw new Error(`no build in ${src} - run npm run ${tauri ? 'tauri:build' : 'package'}`);
 if (!existsSync(yyp)) throw new Error(`C64 Dev Machine project not found: ${yyp}`);
 
-// Chromium UI translations aren't used; keep English only.
-const keep = (p) => !/[\\/]locales[\\/]/.test(p) || /en-US\.pak$/.test(p) || statSync(p).isDirectory();
 rmSync(dest, { recursive: true, force: true });
-cpSync(src, dest, { recursive: true, filter: keep });
+if (tauri) {
+  mkdirSync(dest, { recursive: true });
+  cpSync(join(src, 'C64EMUL8R.exe'), join(dest, 'C64EMUL8R.exe'));
+} else {
+  // Chromium UI translations aren't used; keep English only.
+  const keep = (p) => !/[\\/]locales[\\/]/.test(p) || /en-US\.pak$/.test(p) || statSync(p).isDirectory();
+  cpSync(src, dest, { recursive: true, filter: keep });
+}
 
 const files = [];
 (function walk(d) {

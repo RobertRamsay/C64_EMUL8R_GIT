@@ -1,6 +1,7 @@
 // C64EMUL8R renderer entry: wires the machine to video/audio/input, runs the
 // frame loop, and hosts the toolbar, status bar, debugger and dialogs.
 
+import './tauriHost'; // provides window.host in the Tauri build
 import { C64, StopReason } from '../core/c64';
 import { PALETTES, parseVpl } from '../core/palettes';
 import { attachMedia, detectMedia, parseSid, startSid, SidInfo, MEDIA_EXTENSIONS } from '../core/loaders';

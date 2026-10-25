@@ -20,6 +20,11 @@ xcrun notarytool store-credentials c64emul8r-notary --apple-id <apple-id> --team
 
 `C64EMUL8R_ARCH` picks `universal` (default), `arm64` or `x64`. `C64EMUL8R_SIGN=0` makes an unsigned build for local testing, and `C64EMUL8R_NOTARIZE=0` signs without notarizing. A `build/icon.icns` is used when present. The app records its location in `~/Library/Application Support/c64emul8r/install-path.txt`.
 
+### Tauri build (in progress)
+`npm run tauri:build` builds the same app on Tauri instead of Electron: one `src-tauri/target/release/C64EMUL8R.exe` of about 5 MB that uses the system's WebView2. The emulator and UI are shared; `src-tauri/src/main.rs` ports the Electron main process, and `src/renderer/tauriHost.ts` provides the same `window.host` API on top of it. It keeps the command line, the single window, the ROM search, `settings.json`, `install-path.txt` and the `C64EMUL8R_CAPTURE` hook (which saves the C64 screen canvas in this build).
+
+It needs Rust (`rustup`). Without the Visual Studio C++ tools, `tools/tauri.mjs` links with Rust's `rust-lld` against the installed MSVC and Windows SDK libraries, and `src-tauri/patches/vswhom` removes the one C++ build step. WebView2 ships with Windows 11 and current Windows 10; older systems need Microsoft's WebView2 Runtime. `npm run bundle:devmachine-tauri` puts the Tauri exe into the Dev Machine in place of the Electron bundle; `npm run bundle:devmachine` puts Electron back.
+
 ### Command line
 C64EMUL8R accepts VICE's x64sc options, so tools that drive VICE can use it unchanged:
 

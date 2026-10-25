@@ -1,0 +1,6 @@
+[package]
+name = "vswhom"
+version = "0.1.0"
+edition = "2021"
+description = "Stand-in for vswhom 0.1: same API, no C++ build (see src/lib.rs)"
+license = "MIT"

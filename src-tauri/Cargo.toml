@@ -1,0 +1,29 @@
+[package]
+name = "c64emul8r"
+version = "0.1.0"
+description = "C64EMUL8R - Commodore 64 / C64 Ultimate emulator with built-in debugger"
+authors = ["Robert Ramsay"]
+license = "MIT"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["devtools"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+
+# No C++ compiler needed: see patches/vswhom/src/lib.rs
+[patch.crates-io]
+vswhom = { path = "patches/vswhom" }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

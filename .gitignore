@@ -5,3 +5,6 @@ release/
 # Commodore ROMs are copyrighted - never commit them
 roms/
 *.rom
+# Tauri (Rust) build output and generated schemas
+src-tauri/target/
+src-tauri/gen/
