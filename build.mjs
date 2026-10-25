@@ -9,6 +9,8 @@ mkdirSync('dist/renderer', { recursive: true });
 const copyStatic = () => {
   cpSync('src/renderer/index.html', 'dist/renderer/index.html');
   cpSync('src/renderer/styles.css', 'dist/renderer/styles.css');
+  cpSync('assets/logo.svg', 'dist/renderer/logo.svg');
+  cpSync('build/icon.png', 'dist/renderer/icon.png');
 };
 
 const common = { bundle: true, sourcemap: true, logLevel: 'info', target: 'es2022' };

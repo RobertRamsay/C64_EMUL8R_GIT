@@ -69,6 +69,7 @@ function createWindow(): void {
     width: 1400, height: 900, minWidth: 800, minHeight: 600,
     backgroundColor: '#15171c',
     title: 'C64EMUL8R',
+    icon: join(__dirname, '..', 'renderer', 'icon.png'),
     webPreferences: {
       preload: join(__dirname, 'preload.js'),
       contextIsolation: true,

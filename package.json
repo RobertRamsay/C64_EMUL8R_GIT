@@ -12,8 +12,9 @@
     "start": "node build.mjs && electron .",
     "typecheck": "tsc --noEmit -p .",
     "test": "node build.mjs --tests && node dist/tests/headless.js",
-    "package": "node build.mjs && electron-packager . C64EMUL8R --platform=win32 --arch=x64 --out=release --overwrite --prune=true --ignore=^/src --ignore=^/tools --ignore=^/release --ignore=\\.map$ --ignore=^/dist/tests --ignore=^/build --ignore=^/tsconfig\\.json --ignore=^/README\\.md --ignore=^/\\.git",
+    "package": "node build.mjs && electron-packager . C64EMUL8R --platform=win32 --arch=x64 --icon=build/icon.ico --out=release --overwrite --prune=true --ignore=^/src --ignore=^/tools --ignore=^/assets --ignore=^/release --ignore=\\.map$ --ignore=^/dist/tests --ignore=^/build --ignore=^/tsconfig\\.json --ignore=^/README\\.md --ignore=^/\\.git",
     "package:mac": "node build.mjs && node tools/package-mac.mjs",
+    "icons": "electron tools/make-icons.mjs",
     "bundle:devmachine": "npm run package && node tools/bundle-devmachine.mjs"
   },
   "devDependencies": {
