@@ -392,7 +392,7 @@ export class C64 implements CpuBus, VicMemory {
       return v ?? this.vic.lastBus;
     }
     // $DFxx
-    if (this.config.uci && addr >= 0xdf1c && addr <= 0xdf1f) return this.uci.read(addr);
+    if (this.config.uci && !this.cart && addr >= 0xdf1c && addr <= 0xdf1f) return this.uci.read(addr);
     if (this.isSid2(addr)) { this.syncSid(); return this.sid2!.read(addr); }
     if (this.reu) return this.reu.read(addr);
     const v = this.cart?.readIO2(addr);
@@ -415,7 +415,7 @@ export class C64 implements CpuBus, VicMemory {
       this.cart?.writeIO1(addr, v);
       return;
     }
-    if (this.config.uci && addr >= 0xdf1c && addr <= 0xdf1f) { this.uci.write(addr, v); return; }
+    if (this.config.uci && !this.cart && addr >= 0xdf1c && addr <= 0xdf1f) { this.uci.write(addr, v); return; }
     if (this.isSid2(addr)) { this.syncSid(); this.sid2!.write(addr, v); return; }
     if (this.reu) {
       if (this.reu.write(addr, v)) this.reuTransfer();
@@ -863,6 +863,13 @@ export class C64 implements CpuBus, VicMemory {
   }
 
   pressRestore(down: boolean): void { this.setNmi(2, down); }
+
+  /** Warp helpers: skip audio generation and (optionally) pixel output. */
+  setFastForward(on: boolean, render = true): void {
+    this.sid.fastForward = on;
+    if (this.sid2) this.sid2.fastForward = on;
+    this.vic.skipRender = on && !render;
+  }
 
   /** Pull samples from the SID(s), mixing stereo when a second SID is present. */
   takeAudio(): { left: Float32Array; right: Float32Array } {

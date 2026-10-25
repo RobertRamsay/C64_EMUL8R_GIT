@@ -94,6 +94,8 @@ export class VICII {
   /** Debug: disable sprite/background rendering layers. */
   showSprites = true;
   showBackground = true;
+  /** Skip pixel output (timing, fetches, IRQs and border logic still run). Used by warp. */
+  skipRender = false;
 
   constructor(public mem: VicMemory) {}
 
@@ -370,6 +372,7 @@ export class VICII {
       data = this.mem.vicRead(ecm ? 0x39ff : 0x3fff);
     }
     this.lastBus = data;
+    if (this.skipRender) return;
     const out = this.gCurColor, fg = this.gCurFg;
     const b0 = this.regs[0x21] & 15;
     if (!this.showBackground) data = 0;
@@ -453,6 +456,18 @@ export class VICII {
     const visibleLine = raster >= m.firstVisibleLine && raster < m.firstVisibleLine + m.visibleLines;
     const x0 = 8 * c - 112;
     // left/right comparisons only happen within the visible cycle window
+    if (this.skipRender) {
+      // warp frame-skip: keep the border state machine exact, draw nothing
+      if (c >= FIRST_VIS_CYCLE && c <= LAST_VIS_CYCLE) {
+        if (right >= x0 && right < x0 + 8) this.mainBorder = true;
+        if (left >= x0 && left < x0 + 8) {
+          if (raster === bottom) this.vertBorder = true;
+          else if (raster === top && r11 & 0x10) this.vertBorder = false;
+          if (!this.vertBorder) this.mainBorder = false;
+        }
+      }
+      return;
+    }
     if (c < FIRST_VIS_CYCLE || c > LAST_VIS_CYCLE) {
       if (c === LAST_VIS_CYCLE + 3 && visibleLine) this.finishLine();
       return;

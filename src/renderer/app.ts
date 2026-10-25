@@ -113,6 +113,8 @@ export class App {
     this.c64.updateTraps();
     this.applyVideoSettings();
     this.audio.setVolume(s.audio.volume / 100, !s.audio.enabled);
+    this.c64.sid.quality = s.audio.sidQuality;
+    if (this.c64.sid2) this.c64.sid2.quality = s.audio.sidQuality;
     this.c64.heatEnabled = s.ui.debugger && s.ui.heatmap;
     this.c64.historyEnabled = s.ui.debugger && s.ui.history;
     this.setDebugger(s.ui.debugger, false);
@@ -401,6 +403,19 @@ export class App {
     this.acc = 0;
   }
 
+  /** Warp while requested, while autostart loads, or (auto warp) while a drive/tape motor runs. */
+  private driveIdleFrames = 99;
+  warpActive = false;
+  isWarping(): boolean {
+    if (this.warp || this.c64.autostartWarp) return true;
+    if (!this.settings.machine.autoWarp) return false;
+    const d = this.c64.drive, t = this.c64.tape;
+    const busy = (d.enabled && d.motor) || (t.playing && t.motor);
+    // short hold-over so stop/start of the motor between files doesn't flicker
+    this.driveIdleFrames = busy ? 0 : this.driveIdleFrames + 1;
+    return this.driveIdleFrames < 10;
+  }
+
   setWarp(on: boolean): void {
     this.warp = on;
     this.warpBtn.classList.toggle('on', on);
@@ -580,10 +595,16 @@ export class App {
     this.lastTime = now;
     if (this.running && !this.ultimate.isOpen) {
       const fps = this.c64.fps;
-      const warp = this.warp || this.c64.autostartWarp;
+      const warp = (this.warpActive = this.isWarping());
       if (warp) {
+        // run as many frames as fit in the frame budget; only draw every 8th
         const end = performance.now() + 14;
-        while (performance.now() < end) if (this.runOneFrame(false)) break;
+        let n = 0;
+        while (performance.now() < end) {
+          this.c64.setFastForward(true, (n++ & 7) === 7 || performance.now() > end - 3);
+          if (this.runOneFrame(false)) break;
+        }
+        this.c64.setFastForward(false);
         this.acc = 0;
       } else {
         this.acc += (dt * fps) / 1000;
@@ -615,7 +636,7 @@ export class App {
 
   updateStatus(): void {
     const st = document.getElementById('st-state')!;
-    const warp = this.warp || this.c64.autostartWarp;
+    const warp = this.warpActive;
     st.textContent = !this.c64.hasRoms ? 'NO ROMS' : this.running ? (warp ? 'WARP' : 'RUNNING') : 'PAUSED';
     st.className = 'st-pill ' + (this.running ? (warp ? 'warp' : 'run') : 'pause');
     const media: string[] = [];

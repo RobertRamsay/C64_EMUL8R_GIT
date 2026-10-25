@@ -95,6 +95,8 @@ const renderers: Record<Page, (app: App, el: HTMLElement) => void | (() => void)
       field('Second SID model', select(m.sid2Model, [['6581', '6581'], ['8580', '8580']], (v) => { m.sid2Model = v; reconfig(); })),
       field('1541 drive mode', select(m.trueDrive ? 'true' : 'fast', [['true', 'True drive emulation (most compatible)'], ['fast', 'Fast virtual drive (instant LOAD/SAVE)']], (v) => { m.trueDrive = v === 'true'; reconfig(); }),
         'True drive emulation runs the real 1541 DOS and supports fast loaders. The fast virtual drive traps KERNAL LOAD/SAVE and loads instantly but only works with standard loaders.'),
+      field('Auto warp', checkbox(m.autoWarp, 'Run at full speed while the 1541 or datasette motor is on', (v) => { m.autoWarp = v; app.persist(); }),
+        'Loading (including in-game multi-loads) runs as fast as your PC allows; sound and normal speed return when the drive stops.'),
     );
   },
 
@@ -126,6 +128,8 @@ const renderers: Record<Page, (app: App, el: HTMLElement) => void | (() => void)
       field('Sound', checkbox(a.enabled, 'Enabled', (x) => { a.enabled = x; apply(); })),
       field('Volume', range(a.volume, 0, 100, (x) => { a.volume = x; apply(); }, '%')),
       field('Latency target', range(a.latencyMs, 30, 200, (x) => { a.latencyMs = x; apply(); }, ' ms'), 'Lower = more responsive, higher = fewer crackles on slow machines.'),
+      field('SID engine', select(a.sidQuality, [['resample', 'Accurate — cycle-exact with sinc resampling'], ['fast', 'Fast — cycle-exact, simple averaging']], (x) => { a.sidQuality = x; app.persist(); app.applySettings(); }),
+        'Our own reSID-style 6581/8580 model: per-cycle oscillators, envelopes, combined waveforms, non-linear DACs and filter.'),
       field('Sample rate', h('span', { class: 'mono' }, `${app.audio.sampleRate} Hz`)),
     );
   },

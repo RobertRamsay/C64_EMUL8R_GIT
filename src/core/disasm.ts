@@ -102,7 +102,7 @@ export function parseNumber(s: string, symbols?: (name: string) => number | unde
   if (s.startsWith('$')) return parseInt(s.slice(1), 16);
   if (s.startsWith('%')) return parseInt(s.slice(1), 2);
   if (s.startsWith('#')) return undefined;
-  if (/^[0-9]+$/.test(s)) return parseInt(s, 10);
+  if (s.startsWith('+')) return parseInt(s.slice(1), 10); // VICE: +n is decimal
   if (/^[0-9a-f]+$/i.test(s)) return parseInt(s, 16); // monitor default: hex
   if (symbols) return symbols(s);
   return undefined;

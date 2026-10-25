@@ -124,7 +124,12 @@ export class Cartridge {
           this.onLinesChanged();
         }
         break;
-      case 60: this.bank = v & 0x3f; break;
+      case 60: { // GMod2: bits 0-5 bank, bit 6 disables ROM (EXROM high)
+        this.bank = v & 0x3f;
+        const ex = v & 0x40 ? 1 : 0;
+        if (ex !== this.exrom) { this.exrom = ex; this.onLinesChanged(); }
+        break;
+      }
     }
   }
   writeIO2(addr: number, v: number): void {

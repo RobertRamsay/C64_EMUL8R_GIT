@@ -32,11 +32,13 @@ export interface Settings {
     reuSize: number;
     turbo: number;
     trueDrive: boolean;
+    /** warp automatically while the 1541 or datasette motor runs */
+    autoWarp: boolean;
     uci: boolean;
   };
   romDir: string;
   video: { palette: string; scale: number; scanlines: number; border: 'full' | 'normal' | 'none'; smoothing: boolean };
-  audio: { volume: number; enabled: boolean; latencyMs: number };
+  audio: { volume: number; enabled: boolean; latencyMs: number; sidQuality: 'resample' | 'fast' };
   input: {
     keyMode: 'symbolic' | 'positional';
     ports: { 1: DeviceId[]; 2: DeviceId[] };
@@ -49,10 +51,10 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  machine: { video: 'PAL', sidModel: '6581', sid2Address: 0, sid2Model: '8580', reuSize: 0, turbo: 1, trueDrive: true, uci: true },
+  machine: { video: 'PAL', sidModel: '6581', sid2Address: 0, sid2Model: '8580', reuSize: 0, turbo: 1, trueDrive: true, autoWarp: true, uci: true },
   romDir: '',
   video: { palette: 'Colodore', scale: 0, scanlines: 25, border: 'normal', smoothing: false },
-  audio: { volume: 70, enabled: true, latencyMs: 60 },
+  audio: { volume: 70, enabled: true, latencyMs: 60, sidQuality: 'resample' },
   input: {
     keyMode: 'symbolic',
     ports: { 1: ['gamepad1'], 2: ['keysetA', 'gamepad0'] },
