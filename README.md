@@ -11,6 +11,15 @@ npm start
 
 `npm run package` builds a standalone Windows app in `release/C64EMUL8R-win32-x64/C64EMUL8R.exe`. On start the packaged app writes its location to `%APPDATA%\c64emul8r\install-path.txt` so other tools can find it.
 
+### macOS
+`npm run package:mac` builds a signed, notarized app on a Mac and wraps it in a DMG: `release/C64EMUL8R-<version>-mac-universal.dmg`. It signs with the hardened runtime (entitlements in `build/entitlements.mac.plist`), notarizes and staples both the app and the DMG. It needs Xcode's command line tools, the *Developer ID Application* certificate in the keychain, and a notarytool profile, stored once:
+
+```bash
+xcrun notarytool store-credentials c64emul8r-notary --apple-id <apple-id> --team-id 6N9SMK537V
+```
+
+`C64EMUL8R_ARCH` picks `universal` (default), `arm64` or `x64`. `C64EMUL8R_SIGN=0` makes an unsigned build for local testing, and `C64EMUL8R_NOTARIZE=0` signs without notarizing. A `build/icon.icns` is used when present. The app records its location in `~/Library/Application Support/c64emul8r/install-path.txt`.
+
 ### Command line
 C64EMUL8R accepts VICE's x64sc options, so tools that drive VICE can use it unchanged:
 
@@ -25,6 +34,8 @@ C64EMUL8R ships inside C64 Dev Machine next to VICE. `npm run bundle:devmachine`
 
 In C64 Dev Machine, **OPTIONS → EMULATOR** switches between VICE (the default) and C64EMUL8R for F5 / Build & Run and the RUN FILE panel. The Dev Machine uses the bundled copy unless `[emulator] c64emul8r_path` in `c64devmachine.ini` overrides it. Without a bundled copy, it falls back to the recorded install path, then to a file picker.
 
+On macOS the emulator is a separate app: install `C64EMUL8R.app` in `/Applications` (or `~/Applications`). The Mac Dev Machine finds it there or through the recorded install path, and passes its bundled VICE ROM folder with `-directory`.
+
 Exported `_run.bat` launchers always use VICE.
 
 `npm test` runs the headless smoke tests: boot, BASIC, PRG autostart, fast-drive save/load/directory, and true-1541 load/save.
@@ -32,8 +43,9 @@ Exported `_run.bat` launchers always use VICE.
 ### ROMs
 The Commodore ROMs are copyrighted, so they are **not** included. Don't commit them. When the app starts it looks for `basic`, `kernal`, `chargen` and `dos1541` in these places:
 - the folder chosen in *Settings → ROMs*
+- folders passed with `-directory` (VICE's option; `;`-separated on Windows, `:` on macOS)
 - the app data folder `roms/`
-- any VICE installation under Program Files (VICE keeps them in `C64/` and `DRIVES/`)
+- any VICE installation: under Program Files on Windows; in `/Applications`, `~/Applications`, Desktop or Downloads on macOS, including inside `.app` bundles and the C64 Dev Machine app (VICE keeps them in `C64/` and `DRIVES/`)
 
 Palettes (`.vpl`) found next to the VICE ROMs are added to the palette list.
 

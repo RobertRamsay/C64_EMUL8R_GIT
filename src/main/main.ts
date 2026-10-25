@@ -2,7 +2,7 @@
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import { promises as fs, existsSync, readdirSync, statSync } from 'node:fs';
-import { join, basename, dirname } from 'node:path';
+import { join, basename, dirname, delimiter } from 'node:path';
 
 let win: BrowserWindow | null = null;
 const settingsFile = () => join(app.getPath('userData'), 'settings.json');
@@ -10,7 +10,7 @@ const settingsFile = () => join(app.getPath('userData'), 'settings.json');
 // ---------------------------------------------------------------- command line
 /** Launch options. VICE's spellings are accepted so tools that drive x64sc
  *  (e.g. C64 Dev Machine) can pass the same arguments. */
-export interface LaunchArgs { file?: string; reu?: number; reuImage?: string; sid2?: number; warp?: boolean; attachOnly?: boolean }
+export interface LaunchArgs { file?: string; reu?: number; reuImage?: string; sid2?: number; warp?: boolean; attachOnly?: boolean; romDirs?: string[] }
 
 function parseArgs(argv: string[]): LaunchArgs {
   const a: LaunchArgs = {};
@@ -30,12 +30,27 @@ function parseArgs(argv: string[]): LaunchArgs {
       case 'reuimage': case 'reu-image': a.reuImage = argv[++i]; if (a.reu === undefined) a.reu = 16384; break;
       case 'sid2': case 'sid2address': a.sid2 = num(argv[++i]); break;
       case 'warp': a.warp = true; break;
+      // VICE's ROM search path (';' on Windows, ':' elsewhere). The Dev Machine
+      // passes its bundled vice folder here on macOS.
+      case 'directory': case 'romdir': a.romDirs = (argv[++i] ?? '').split(delimiter).filter(Boolean); break;
       default: break; // unknown VICE options (e.g. -sidextra 1) are ignored
     }
   }
   return a;
 }
-const cliArgs = () => parseArgs(process.argv.slice(app.isPackaged ? 1 : 2));
+// macOS hands files opened from Finder or `open -a C64EMUL8R x.prg` over as
+// open-file events instead of argv; one that arrives before the window waits here.
+let openedFile: string | undefined;
+const cliArgs = () => {
+  const a = parseArgs(process.argv.slice(app.isPackaged ? 1 : 2));
+  if (!a.file && openedFile) a.file = openedFile;
+  return a;
+};
+app.on('open-file', (e, path) => {
+  e.preventDefault();
+  if (win && !win.webContents.isLoading()) win.webContents.send('launch-args', { file: path } satisfies LaunchArgs);
+  else openedFile = path;
+});
 
 // One window: launching again (e.g. after every build) hands the file to the
 // running emulator instead of starting a second copy.
@@ -61,7 +76,10 @@ function createWindow(): void {
       backgroundThrottling: false,
     },
   });
-  Menu.setApplicationMenu(null);
+  // macOS needs an app menu for Cmd+Q and for Cmd+C / Cmd+V in text fields
+  Menu.setApplicationMenu(process.platform === 'darwin'
+    ? Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }])
+    : null);
   win.loadFile(join(__dirname, '..', 'renderer', 'index.html'));
   win.webContents.on('before-input-event', (_e, input) => {
     if (input.type === 'keyDown' && input.key === 'F12' && input.control && input.shift) win?.webContents.toggleDevTools();
@@ -96,22 +114,33 @@ const ROM_PATTERNS: Record<string, RegExp> = {
 };
 const ROM_SIZES: Record<string, number[]> = { basic: [8192], kernal: [8192], chargen: [4096], dos1541: [16384, 32768] };
 
+/** Where a macOS app bundle keeps ROMs: VICE under share/vice, C64 Dev Machine
+ *  under vice (its Included Files), older VICE builds under ROM. */
+const bundleRomDirs = (bundle: string) =>
+  ['share/vice', 'vice', 'ROM', ''].map((d) => join(bundle, 'Contents', 'Resources', d));
+
 function viceDirs(): string[] {
   const out: string[] = [];
-  // Bundled with C64 Dev Machine: <dm>/c64emul8r/C64EMUL8R.exe next to <dm>/vice/win
-  if (app.isPackaged) {
+  const home = app.getPath('home');
+  const mac = process.platform === 'darwin';
+  // Bundled with C64 Dev Machine (Windows): <dm>/c64emul8r/C64EMUL8R.exe next to <dm>/vice/win
+  if (app.isPackaged && process.platform === 'win32') {
     const dm = dirname(dirname(process.execPath));
     out.push(join(dm, 'vice', 'win'), join(dm, 'vice'));
   }
-  const roots = ['C:/Program Files', 'C:/Program Files (x86)', join(app.getPath('home'), 'Desktop'), join(app.getPath('home'), 'Downloads'), 'C:/'];
+  const roots = mac ? ['/Applications', join(home, 'Applications'), join(home, 'Desktop'), join(home, 'Downloads')]
+    : process.platform === 'win32' ? ['C:/Program Files', 'C:/Program Files (x86)', join(home, 'Desktop'), join(home, 'Downloads'), 'C:/']
+    : ['/usr/share', '/usr/local/share', '/usr/lib', '/usr/local/lib', join(home, 'Desktop'), join(home, 'Downloads')];
+  const add = (d: string) => { if (mac && /\.app$/i.test(d)) out.push(...bundleRomDirs(d)); else out.push(d, join(d, 'vice')); };
   for (const root of roots) {
     let entries: string[] = [];
     try { entries = readdirSync(root); } catch { continue; }
     for (const e of entries) {
       if (!/vice|c64|commodore/i.test(e)) continue;
       const d = join(root, e);
-      out.push(d, join(d, 'vice'));
-      try { for (const sub of readdirSync(d)) if (/vice/i.test(sub)) out.push(join(d, sub)); } catch { /* ignore */ }
+      add(d);
+      // VICE's macOS download is a folder of apps (x64sc.app, vsid.app, ...)
+      try { for (const sub of readdirSync(d)) if (/vice/i.test(sub) || (mac && /\.app$/i.test(sub))) add(join(d, sub)); } catch { /* ignore */ }
     }
   }
   return out;
@@ -135,7 +164,7 @@ async function findRomsIn(dir: string): Promise<Record<string, string>> {
 }
 
 ipcMain.handle('roms:find', async (_e, preferred?: string) => {
-  const dirs = [preferred, join(app.getPath('userData'), 'roms'), ...viceDirs()].filter(Boolean) as string[];
+  const dirs = [preferred, ...(cliArgs().romDirs ?? []), join(app.getPath('userData'), 'roms'), ...viceDirs()].filter(Boolean) as string[];
   const result: Record<string, string> = {};
   for (const d of dirs) {
     if (!existsSync(d)) continue;
