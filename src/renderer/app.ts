@@ -16,6 +16,7 @@ import { btn, dropdown, h, menuItem, toast, clear, hex4 } from './ui/dom';
 import { openSettings } from './ui/settingsDialog';
 import { DebuggerUI } from './ui/debugger';
 import { UltimateMenu } from './ui/ultimate';
+import { DEMOS } from './demos';
 
 export class App {
   c64 = new C64();
@@ -157,6 +158,9 @@ export class App {
       menuItem('Eject tape', () => { this.c64.tape.eject(); this.updateStatus(); }, '', 'eject'),
       h('hr'),
       menuItem('Remove cartridge', () => { this.c64.attachCartridge(null); this.c64.hardReset(); this.updateStatus(); }, '', 'cart'),
+      h('hr'),
+      h('div', { class: 'menu-title' }, 'Built-in demos'),
+      ...DEMOS.map((d) => menuItem(d.name, () => this.attach(d.file, d.data, true), '', 'play')),
       ...(this.settings.ui.recent.length ? [h('hr'), h('div', { class: 'menu-title' }, 'Recent')] : []),
       ...this.settings.ui.recent.slice(0, 8).map((p) => menuItem(p.split(/[\\/]/).pop() ?? p, () => this.openPath(p, true))),
     ]);

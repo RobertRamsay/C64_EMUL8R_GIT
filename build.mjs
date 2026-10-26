@@ -13,7 +13,7 @@ const copyStatic = () => {
   cpSync('build/icon.png', 'dist/renderer/icon.png');
 };
 
-const common = { bundle: true, sourcemap: true, logLevel: 'info', target: 'es2022' };
+const common = { bundle: true, sourcemap: true, logLevel: 'info', target: 'es2022', loader: { '.prg': 'binary' } };
 const builds = [
   { ...common, entryPoints: ['src/main/main.ts'], outfile: 'dist/main/main.js', platform: 'node', format: 'cjs', external: ['electron'] },
   { ...common, entryPoints: ['src/main/preload.ts'], outfile: 'dist/main/preload.js', platform: 'node', format: 'cjs', external: ['electron'] },
