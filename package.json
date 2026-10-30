@@ -1,6 +1,6 @@
 {
   "name": "c64emul8r",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "C64EMUL8R - Commodore 64 / C64 Ultimate emulator with built-in debugger",
   "main": "dist/main/main.js",
   "author": "Robert Ramsay",
