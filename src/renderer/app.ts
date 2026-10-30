@@ -299,6 +299,7 @@ export class App {
       try {
         const img: Uint8Array = await window.host.readFile(a.reuImage);
         this.c64.reu.ram.set(img.subarray(0, this.c64.reu.ram.length));
+        this.c64.reu.markAllDirty();
       } catch (e) { toast('Cannot read REU image: ' + (e as Error).message, true); }
     }
     if (a.warp) this.setWarp(true);

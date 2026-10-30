@@ -229,6 +229,63 @@ function check(name: string, ok: boolean, detail = ''): void {
   check('SID player calls play for a tune under BASIC', c.ram[0xc800] >= 40, `play calls in 50 frames: ${c.ram[0xc800]}`);
 }
 
+// 4e. turbo idle loop skipping must not change what the machine does. The
+// program waits for line $30 with CPX $D012 / BNE (an idle loop), then counts
+// how many INY passes fit in each raster line, which depends on the exact turbo
+// cycle the wait ended on, and stores the counts at $C100
+{
+  const counts = (turbo: number, skip: boolean) => {
+    const c = machine(false);
+    c.applyConfig({ turbo });
+    c.idleLoopSkip = skip;
+    runFrames(c, 150);
+    c.ram.set([
+      0x78,             // SEI
+      0xa2, 0x30,       // top: LDX #$30
+      0xec, 0x12, 0xd0, // w: CPX $D012
+      0xd0, 0xfb,       // BNE w
+      0xa0, 0x00,       // LDY #0
+      0xc8,             // c: INY
+      0xec, 0x12, 0xd0, // CPX $D012
+      0xf0, 0xfa,       // BEQ c
+      0x98,             // TYA
+      0x9d, 0x00, 0xc1, // STA $C100,X
+      0xe8,             // INX
+      0xe0, 0xc0,       // CPX #$C0
+      0xd0, 0xea,       // BNE w
+      0x4c, 0x01, 0xc0, // JMP top
+    ], 0xc000);
+    c.cpu.pc = 0xc000;
+    const out: number[] = [];
+    for (let f = 0; f < 10; f++) { runFrames(c, 1); out.push(...c.ram.subarray(0xc130, 0xc1c0)); }
+    return out;
+  };
+  const res = [16, 48].map((t) => {
+    const on = counts(t, true), off = counts(t, false);
+    return { t, same: on.every((v, i) => v === off[i]), sample: on.slice(0, 4) };
+  });
+  check('turbo idle loop skipping keeps cycle timing', res.every((r) => r.same && r.sample[1] > 0), JSON.stringify(res));
+}
+
+// 4f. REU save states share the 64 KB pages that weren't written, and restore
+{
+  const c = machine(false);
+  c.applyConfig({ reuSize: 512 });
+  runFrames(c, 150);
+  const s1 = c.saveState(), s2 = c.saveState();
+  for (let i = 0; i < 16; i++) c.ram[0xc000 + i] = 0x40 + i;
+  // DMA 16 bytes from $C000 to REU $010000
+  [[0xdf02, 0x00], [0xdf03, 0xc0], [0xdf04, 0x00], [0xdf05, 0x00], [0xdf06, 0x01], [0xdf07, 16], [0xdf08, 0], [0xdf01, 0x90]].forEach(([a, v]) => c.poke(a, v));
+  const s3 = c.saveState();
+  const shared = s1.reu.pages[1] === s2.reu.pages[1] && s3.reu.pages[0] === s2.reu.pages[0] && s3.reu.pages[1] !== s2.reu.pages[1];
+  c.reu!.ram[0x10000] = 0;
+  c.loadState(s3);
+  const restored = c.reu!.ram[0x10000] === 0x40 && c.reu!.ram[0x1000f] === 0x4f;
+  c.loadState(s1);
+  const rewound = c.reu!.ram[0x10000] !== 0x40;
+  check('REU save states share unwritten pages and restore', shared && restored && rewound, `shared ${shared}, restored ${restored}, rewound ${rewound}`);
+}
+
 // 5. fast virtual drive: save + load + directory
 {
   const c = machine(false);

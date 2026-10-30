@@ -91,6 +91,9 @@ export class C64 implements CpuBus, VicMemory {
   joy1 = 0; joy2 = 0;
 
   cycles = 0;
+  private turbo = 1;
+  /** interrupt lines changed since the CPU last sampled them */
+  private linesChanged = true;
   private turboSub = 0;
   private driveTarget = 0;
   private driveRatio = 1000000 / 985248;
@@ -110,8 +113,15 @@ export class C64 implements CpuBus, VicMemory {
   breakpoints: Breakpoint[] = [];
   private nextBpId = 1;
   watchActive = false;
+  private execBpActive = false;
   stop: StopReason | null = null;
-  heatEnabled = false;
+  private heat = false;
+  get heatEnabled(): boolean { return this.heat; }
+  set heatEnabled(v: boolean) { this.heat = v; this.memHooks = v || this.watchActive; }
+  /** watchpoints or the heatmap need to see every memory access */
+  private memHooks = false;
+  /** CPU writes so far; a loop that writes nothing can be skipped (see runFrame) */
+  private writes = 0;
   heatRead = new Uint8Array(0x10000);
   heatWrite = new Uint8Array(0x10000);
   heatExec = new Uint8Array(0x10000);
@@ -178,9 +188,11 @@ export class C64 implements CpuBus, VicMemory {
 
   setIrq(bit: number, active: boolean): void {
     if (active) this.cpu.irqLines |= bit; else this.cpu.irqLines &= ~bit;
+    this.linesChanged = true;
   }
   setNmi(bit: number, active: boolean): void {
     if (active) this.cpu.nmiLines |= bit; else this.cpu.nmiLines &= ~bit;
+    this.linesChanged = true;
   }
 
   loadRoms(r: RomSet): void {
@@ -195,6 +207,8 @@ export class C64 implements CpuBus, VicMemory {
     const prev = this.config;
     this.config = { ...this.config, ...c };
     const cfg = this.config;
+    this.turbo = Math.max(1, cfg.turbo);
+    this.turboSub = 0;
     if (prev.video !== cfg.video || !this.vic.model) this.vic.setModel(cfg.video === 'PAL' ? PAL : NTSC);
     const clock = this.clockHz;
     this.sid.model = cfg.sidModel;
@@ -235,7 +249,7 @@ export class C64 implements CpuBus, VicMemory {
     this.reu?.reset();
     this.cart?.reset();
     this.uci.reset();
-    this.cpu.irqLines = 0; this.cpu.nmiLines = 0;
+    this.cpu.irqLines = 0; this.cpu.nmiLines = 0; this.linesChanged = true;
     this.keyboard.clear();
     this.typeQueue = [];
     this.updateMap();
@@ -293,11 +307,16 @@ export class C64 implements CpuBus, VicMemory {
   // ---------------------------------------------------------------- timing
   /** Advance the whole machine by one phi2 cycle. */
   private cycle(): void {
-    this.cpu.sampleInterrupts();
-    if (this.config.turbo > 1) {
-      if (++this.turboSub < this.config.turbo) return;
-      this.turboSub = 0;
+    if (++this.turboSub < this.turbo) {
+      // turbo cycles between phi2 cycles don't clock the chips, so the
+      // interrupt lines only change when the CPU itself touches I/O; sampling
+      // again with unchanged lines would give the same result
+      if (this.linesChanged) { this.linesChanged = false; this.cpu.sampleInterrupts(); }
+      return;
     }
+    this.turboSub = 0;
+    this.cpu.sampleInterrupts();
+    this.linesChanged = false;
     this.vic.clock();
     this.cia1.clock();
     this.cia2.clock();
@@ -314,17 +333,22 @@ export class C64 implements CpuBus, VicMemory {
   }
 
   read(addr: number): number {
-    if (this.config.turbo <= 1) while (this.vic.ba) this.cycle();
+    if (this.turbo === 1) while (this.vic.ba) this.cycle();
     this.cycle();
-    if (this.watchActive) this.checkWatch(addr, false, 0);
-    if (this.heatEnabled) this.heatRead[addr] = 255;
+    if (this.memHooks) {
+      if (this.watchActive) this.checkWatch(addr, false, 0);
+      if (this.heat) this.heatRead[addr] = 255;
+    }
     return this.readMem(addr);
   }
 
   write(addr: number, v: number): void {
+    this.writes++;
     this.cycle();
-    if (this.watchActive) this.checkWatch(addr, true, v);
-    if (this.heatEnabled) this.heatWrite[addr] = 255;
+    if (this.memHooks) {
+      if (this.watchActive) this.checkWatch(addr, true, v);
+      if (this.heat) this.heatWrite[addr] = 255;
+    }
     this.writeMem(addr, v);
   }
 
@@ -392,7 +416,10 @@ export class C64 implements CpuBus, VicMemory {
       return v ?? this.vic.lastBus;
     }
     // $DFxx
-    if (this.config.uci && !this.cart && addr >= 0xdf1c && addr <= 0xdf1f) return this.uci.read(addr);
+    if (this.config.uci && !this.cart && addr >= 0xdf1c && addr <= 0xdf1f) {
+      this.writes++; // reading the response queues consumes them, so a polling loop isn't idle
+      return this.uci.read(addr);
+    }
     if (this.isSid2(addr)) { this.syncSid(); return this.sid2!.read(addr); }
     if (this.reu) return this.reu.read(addr);
     const v = this.cart?.readIO2(addr);
@@ -499,14 +526,17 @@ export class C64 implements CpuBus, VicMemory {
     this.bpFlags.fill(0);
     this.rasterBreakLines.clear();
     let watch = false;
+    this.execBpActive = false;
     for (const b of this.breakpoints) {
       if (!b.enabled) continue;
       if (b.kind === 'raster') { this.rasterBreakLines.add(b.start); continue; }
       const flag = b.kind === 'exec' ? BP.EXEC : b.kind === 'read' ? BP.READ : b.kind === 'write' ? BP.WRITE : BP.READ | BP.WRITE;
       if (flag & (BP.READ | BP.WRITE)) watch = true;
+      if (flag & BP.EXEC) this.execBpActive = true;
       for (let a = b.start; ; a = (a + 1) & 0xffff) { this.bpFlags[a] |= flag; if (a === b.end) break; }
     }
     this.watchActive = watch;
+    this.memHooks = watch || this.heat;
     this.vic.onLine = this.rasterBreakLines.size ? (line) => {
       if (this.rasterBreakLines.has(line) && !this.stop) this.stop = { kind: 'raster', line };
     } : null;
@@ -570,12 +600,14 @@ export class C64 implements CpuBus, VicMemory {
   stepOutSp = -1;
   stepDrive = false;
   private trapMap = new Map<number, () => boolean>();
+  /** lowest trap address, so most instructions skip the trap lookup */
+  private trapMin = 0x10000;
 
   /** Execute a single instruction with all debug checks; sets `stop` when halted. */
   private execOne(): void {
     const cpu = this.cpu;
     const pc = cpu.pc;
-    if (this.trapMap.size && this.kernalMapped) {
+    if (pc >= this.trapMin && this.kernalMapped) {
       const trap = this.trapMap.get(pc);
       if (trap && trap()) return;
     }
@@ -588,11 +620,10 @@ export class C64 implements CpuBus, VicMemory {
       if (this.historyCount < this.historySize) this.historyCount++;
     }
     if (this.heatEnabled) this.heatExec[pc] = 255;
-    const opBefore = this.peek(pc);
     cpu.step();
     if (cpu.lastWasInterrupt && this.breakOnIrq && !this.stop) this.stop = { kind: 'irq' };
     if (cpu.jammed && this.breakOnJam && !this.stop) { this.stop = { kind: 'jam', addr: cpu.pc }; return; }
-    if (this.stepOutSp >= 0 && (opBefore === 0x60 || opBefore === 0x40) && !cpu.lastWasInterrupt && cpu.s > this.stepOutSp) {
+    if (this.stepOutSp >= 0 && (cpu.lastOpcode === 0x60 || cpu.lastOpcode === 0x40) && !cpu.lastWasInterrupt && cpu.s > this.stepOutSp) {
       this.stepOutSp = -1; this.stop = { kind: 'step' };
     }
     if (this.stepCount > 0 && --this.stepCount === 0) this.stop = { kind: 'step' };
@@ -605,12 +636,66 @@ export class C64 implements CpuBus, VicMemory {
     this.stop = null;
     const vic = this.vic;
     vic.frameReady = false;
-    while (!vic.frameReady) {
-      this.execOne();
-      if (this.stop) return this.stop;
+    if (this.historyEnabled || this.heatEnabled || this.breakOnIrq || this.execBpActive || this.stepOutSp >= 0 || this.stepCount > 0) {
+      while (!vic.frameReady) {
+        this.execOne();
+        if (this.stop) return this.stop;
+      }
+    } else {
+      // execOne without the debugger features that are switched off; at high
+      // turbo speeds the per-instruction checks cost as much as the instruction
+      const cpu = this.cpu;
+      while (!vic.frameReady) {
+        if (cpu.pc >= this.trapMin && this.kernalMapped) {
+          const trap = this.trapMap.get(cpu.pc);
+          if (trap && trap()) { if (this.stop) return this.stop; continue; }
+        }
+        const pc = cpu.pc;
+        cpu.step();
+        if (cpu.jammed && this.breakOnJam && !this.stop) this.stop = { kind: 'jam', addr: cpu.pc };
+        if (this.drive.breakHit) { this.drive.breakHit = false; this.stop ??= { kind: 'drive-breakpoint', addr: this.drive.cpu.pc }; }
+        if (this.stop) return this.stop;
+        if (this.turbo > 1 && cpu.pc <= pc && !cpu.lastWasInterrupt && this.idleLoopSkip) this.skipIdleLoop();
+      }
     }
     this.endOfFrame();
     return null;
+  }
+
+  // Idle loop skipping. In turbo mode the chips only move every `turbo` CPU
+  // cycles, so a loop that writes nothing and polls I/O (LDA $D012 / CMP / BNE)
+  // sees the same values on every pass until the next phi2 cycle. Once two
+  // passes in a row start from the same CPU state, take the same number of
+  // cycles and write nothing, the passes left before the next phi2 cycle would
+  // all be the same too, so jump the turbo clock over them.
+  /** off only to check that skipping changes nothing */
+  idleLoopSkip = true;
+  private loopPc = -1;
+  private loopRegs = 0;
+  private loopFlags = 0;
+  private loopAt = 0;
+  private loopLen = 0;
+  private loopWrites = 0;
+  private loopCycles = 0;
+
+  private skipIdleLoop(): void {
+    const cpu = this.cpu;
+    const at = this.cycles * this.turbo + this.turboSub;
+    const regs = (cpu.a << 24 | cpu.x << 16 | cpu.y << 8 | cpu.s) >>> 0;
+    const flags = cpu.fc | cpu.fz << 1 | cpu.fi << 2 | cpu.fd << 3 | cpu.fv << 6 | cpu.fn << 7;
+    const len = at - this.loopAt;
+    if (cpu.pc === this.loopPc && regs === this.loopRegs && flags === this.loopFlags &&
+        this.writes === this.loopWrites && this.cycles === this.loopCycles && !this.linesChanged) {
+      if (len === this.loopLen) {
+        const passes = Math.floor((this.turbo - 1 - this.turboSub) / len);
+        if (passes > 0) this.turboSub += passes * len;
+      }
+    } else {
+      this.loopPc = cpu.pc; this.loopRegs = regs; this.loopFlags = flags;
+      this.loopWrites = this.writes; this.loopCycles = this.cycles;
+    }
+    this.loopLen = len;
+    this.loopAt = this.cycles * this.turbo + this.turboSub;
   }
 
   /** Run for at most `maxCycles` (used for stepping by raster line etc.) */
@@ -763,6 +848,7 @@ export class C64 implements CpuBus, VicMemory {
       this.trapMap.set(0xf4a5, () => this.trapLoad());
       this.trapMap.set(0xf5ed, () => this.trapSave());
     }
+    this.trapMin = Math.min(0x10000, ...this.trapMap.keys());
   }
 
   private rts(): void {
@@ -895,7 +981,7 @@ export class C64 implements CpuBus, VicMemory {
       vic: this.vic.saveState(), sid: this.sid.saveState(), sid2: this.sid2?.saveState(),
       cia1: this.cia1.saveState(), cia2: this.cia2.saveState(),
       drive: this.drive.enabled ? this.drive.saveState() : null,
-      reu: this.reu ? { ram: this.reu.ram.slice() } : null,
+      reu: this.reu ? { pages: this.reu.savePages() } : null,
       cart: this.cart ? { bank: this.cart.bank, exrom: this.cart.exrom, game: this.cart.game, ram: this.cart.ram.slice() } : null,
       tape: this.tape.saveState(),
       iec: { ...this.iec },
@@ -910,11 +996,11 @@ export class C64 implements CpuBus, VicMemory {
     this.vic.loadState(s.vic);
     this.sid.loadState(s.sid); this.sid.lastClock = this.cycles;
     if (s.sid2 && this.sid2) { this.sid2.loadState(s.sid2); this.sid2.lastClock = this.cycles; }
-    this.cpu.irqLines = 0; this.cpu.nmiLines = 0;
+    this.cpu.irqLines = 0; this.cpu.nmiLines = 0; this.linesChanged = true;
     this.cia1.loadState(s.cia1); this.cia2.loadState(s.cia2);
     this.cia2.ports.writeA!(this.cia2.portAOut());
     if (s.drive) { this.drive.loadState(s.drive); this.driveTarget = this.drive.clock; }
-    if (s.reu && this.reu) this.reu.ram.set(s.reu.ram);
+    if (s.reu && this.reu) this.reu.loadPages(s.reu.pages ?? s.reu.ram);
     if (s.cart && this.cart) { this.cart.bank = s.cart.bank; this.cart.exrom = s.cart.exrom; this.cart.game = s.cart.game; this.cart.ram.set(s.cart.ram); }
     this.tape.loadState(s.tape);
     Object.assign(this.iec, s.iec);

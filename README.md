@@ -72,7 +72,7 @@ Palettes (`.vpl`) found next to the VICE ROMs are added to the palette list.
 
 **C64 Ultimate features**
 - REU from 128 KB to 16 MB, with DMA
-- CPU turbo up to 48 MHz
+- CPU turbo up to 77 MHz (above 48 MHz, programs that compute without waiting can run below full speed)
 - Dual SID at configurable addresses
 - Ultimate Command Interface ID at `$DF1C`
 - SID player

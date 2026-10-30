@@ -1,6 +1,8 @@
 // Commodore 1700/1764/1750 RAM Expansion Unit (and the larger 1750 XL
 // sizes up to 16MB that the Ultimate 64 / Ultimate-II+ offer) at $DF00.
 
+const REU_PAGE = 0x10000;
+
 export class REU {
   ram: Uint8Array;
   status = 0x10; // bit4: 256K+ chips
@@ -12,9 +14,37 @@ export class REU {
   irqOut = false;
   onIrq: (a: boolean) => void = () => {};
 
+  // Save states hold the RAM as 64 KB pages, and a page that hasn't been
+  // written since the last save is shared with it instead of copied, so the
+  // rewind buffer doesn't copy all of a 16 MB REU twice a second.
+  private dirty: Uint8Array;
+  private saved: Uint8Array[] = [];
+
   constructor(public sizeKB: number) {
     this.ram = new Uint8Array(sizeKB * 1024);
+    this.dirty = new Uint8Array(Math.ceil(this.ram.length / REU_PAGE)).fill(1);
     if (sizeKB <= 128) this.status = 0;
+  }
+
+  /** Call after changing `ram` directly. */
+  markAllDirty(): void { this.dirty.fill(1); }
+
+  /** The RAM as pages for a save state; treat them as read-only. */
+  savePages(): Uint8Array[] {
+    for (let p = 0; p < this.dirty.length; p++) {
+      if (this.dirty[p]) { this.saved[p] = this.ram.slice(p * REU_PAGE, (p + 1) * REU_PAGE); this.dirty[p] = 0; }
+    }
+    return this.saved.slice();
+  }
+
+  /** Restore from `savePages` pages, or from one array (older snapshots). */
+  loadPages(pages: Uint8Array[] | Uint8Array): void {
+    if (pages instanceof Uint8Array) { this.ram.set(pages.subarray(0, this.ram.length)); this.markAllDirty(); return; }
+    for (let p = 0; p < this.dirty.length; p++) {
+      if (!pages[p]) { this.dirty[p] = 1; continue; }
+      this.ram.set(pages[p], p * REU_PAGE);
+      this.saved[p] = pages[p]; this.dirty[p] = 0;
+    }
   }
 
   get mask(): number { return this.ram.length - 1; }
@@ -87,9 +117,9 @@ export class REU {
     while (len > 0) {
       stall();
       switch (type) {
-        case 0: this.ram[ra & m] = rd(ca); break;
+        case 0: this.ram[ra & m] = rd(ca); this.dirty[(ra & m) >> 16] = 1; break;
         case 1: wr(ca, this.ram[ra & m]); break;
-        case 2: { const a = rd(ca); const b = this.ram[ra & m]; wr(ca, b); this.ram[ra & m] = a; break; }
+        case 2: { const a = rd(ca); const b = this.ram[ra & m]; wr(ca, b); this.ram[ra & m] = a; this.dirty[(ra & m) >> 16] = 1; break; }
         case 3: if (rd(ca) !== this.ram[ra & m]) verifyError = true; break;
       }
       if (!fixC64) ca = (ca + 1) & 0xffff;

@@ -91,7 +91,7 @@ export function saveSettings(s: Settings): void {
 
 export const SID2_ADDRESSES = [0, 0xd420, 0xd440, 0xd500, 0xd600, 0xde00, 0xdf00];
 export const REU_SIZES = [0, 128, 256, 512, 1024, 2048, 4096, 8192, 16384];
-export const TURBO_SPEEDS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48];
+export const TURBO_SPEEDS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48, 64, 77];
 
 export function keyLabel(code: string): string {
   if (!code) return '—';
