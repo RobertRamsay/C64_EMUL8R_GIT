@@ -2,6 +2,7 @@
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import { promises as fs, existsSync, readdirSync, statSync } from 'node:fs';
+import { createServer, type Server, type Socket } from 'node:net';
 import { join, basename, dirname, delimiter } from 'node:path';
 
 let win: BrowserWindow | null = null;
@@ -10,7 +11,7 @@ const settingsFile = () => join(app.getPath('userData'), 'settings.json');
 // ---------------------------------------------------------------- command line
 /** Launch options. VICE's spellings are accepted so tools that drive x64sc
  *  (e.g. C64 Dev Machine) can pass the same arguments. */
-export interface LaunchArgs { file?: string; reu?: number; reuImage?: string; sid2?: number; warp?: boolean; attachOnly?: boolean; romDirs?: string[] }
+export interface LaunchArgs { file?: string; reu?: number; reuImage?: string; sid2?: number; warp?: boolean; attachOnly?: boolean; romDirs?: string[]; binmon?: boolean; binmonAddress?: string }
 
 function parseArgs(argv: string[]): LaunchArgs {
   const a: LaunchArgs = {};
@@ -30,6 +31,9 @@ function parseArgs(argv: string[]): LaunchArgs {
       case 'reuimage': case 'reu-image': a.reuImage = argv[++i]; if (a.reu === undefined) a.reu = 16384; break;
       case 'sid2': case 'sid2address': a.sid2 = num(argv[++i]); break;
       case 'warp': a.warp = true; break;
+      // VICE binary monitor: -binarymonitor [-binarymonitoraddress ip4://127.0.0.1:6502]
+      case 'binarymonitor': a.binmon = true; break;
+      case 'binarymonitoraddress': a.binmonAddress = argv[++i]; a.binmon = true; break;
       // VICE's ROM search path (';' on Windows, ':' elsewhere). The Dev Machine
       // passes its bundled vice folder here on macOS.
       case 'directory': case 'romdir': a.romDirs = (argv[++i] ?? '').split(delimiter).filter(Boolean); break;
@@ -255,6 +259,30 @@ ipcMain.handle('settings:save', async (_e, s: unknown) => {
 
 ipcMain.handle('win:fullscreen', () => { if (win) win.setFullScreen(!win.isFullScreen()); });
 ipcMain.handle('win:title', (_e, t: string) => { win?.setTitle(t); });
+
+// ---------------------------------------------------------------- binary monitor
+// TCP side of the VICE binary monitor: bytes are relayed to the renderer, which
+// speaks the protocol (src/core/binmon.ts).
+let binmonServer: Server | null = null;
+const binmonConns = new Map<number, Socket>();
+let binmonNext = 1;
+ipcMain.handle('binmon:listen', (_e, address: string) => new Promise<string | null>((resolve) => {
+  if (binmonServer) { resolve(null); return; }
+  const m = /^(?:ip4:\/\/)?([^:]*):?(\d*)$/.exec(address.trim());
+  const host = m?.[1] || '127.0.0.1', port = Number(m?.[2] || 6502);
+  const server = createServer((sock) => {
+    const id = binmonNext++;
+    binmonConns.set(id, sock);
+    sock.setNoDelay(true);
+    win?.webContents.send('binmon', { conn: id, open: true });
+    sock.on('data', (d) => win?.webContents.send('binmon', { conn: id, data: new Uint8Array(d) }));
+    sock.on('close', () => { binmonConns.delete(id); win?.webContents.send('binmon', { conn: id, closed: true }); });
+    sock.on('error', () => sock.destroy());
+  });
+  server.once('error', (err) => resolve(err.message));
+  server.listen(port, host, () => { binmonServer = server; resolve(null); });
+}));
+ipcMain.handle('binmon:send', (_e, conn: number, data: Uint8Array) => { binmonConns.get(conn)?.write(data); });
 
 app.whenReady().then(() => {
   createWindow();

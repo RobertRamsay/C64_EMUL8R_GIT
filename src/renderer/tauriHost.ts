@@ -52,6 +52,9 @@ if (T && !(window as unknown as { host?: HostApi }).host) {
     setTitle: (t: string) => invoke('set_title', { t }),
     pathForFile: (f: File) => dropPaths.get(f) ?? '',
     onLaunchArgs: (cb) => { void T.event.listen('launch-args', (e) => cb(e.payload)); },
+    binmonListen: (address: string) => invoke('binmon_listen', { address }),
+    binmonSend: (conn: number, data: Uint8Array) => invoke('binmon_send', data, { headers: { 'x-conn': String(conn) } }),
+    onBinmon: (cb) => { void T.event.listen('binmon', (e) => cb(e.payload)); },
   } as HostApi;
   (window as unknown as { host: HostApi }).host = api;
 

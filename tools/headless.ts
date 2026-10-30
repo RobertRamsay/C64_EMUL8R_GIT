@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { C64 } from '../src/core/c64';
 import { D64 } from '../src/core/d64';
 import { attachMedia } from '../src/core/loaders';
+import { BinaryMonitor } from '../src/core/binmon';
 
 const candidates = [
   process.env.C64_ROMS,
@@ -119,6 +120,92 @@ function check(name: string, ok: boolean, detail = ''): void {
   const ok = split > 0 && mid.slice(0, split).every((v) => v === 2) && mid.slice(split).every((v) => v === 5)
     && spriteRow(109).every((v) => v === 2) && spriteRow(111).every((v) => v === 2);
   check('sprite colour changed mid-line', ok, `line 109: ${spriteRow(109).join('')}\nline 110: ${mid.join(' ')}\nline 111: ${spriteRow(111).join('')}`);
+}
+
+// 4c. VICE binary monitor protocol, driven as a TCP client would drive it
+{
+  const c = machine(false);
+  runFrames(c, 150); // READY prompt
+  const out: { type: number; err: number; id: number; body: Uint8Array }[] = [];
+  let running = true;
+  const mon: BinaryMonitor = new BinaryMonitor({
+    c64: c,
+    isRunning: () => running,
+    stop: () => { running = false; mon.paused(); },
+    go: () => { running = true; mon.resumed(); },
+    refresh: () => {},
+    reset: (hard) => (hard ? c.hardReset() : c.reset()),
+    autostart: async () => false,
+    palette: () => Array.from({ length: 16 }, () => [0, 0, 0]),
+  }, (_conn, d) => {
+    // split the stream back into responses
+    let p = 0;
+    while (p < d.length) {
+      const len = d[p + 2] | (d[p + 3] << 8) | (d[p + 4] << 16) | (d[p + 5] << 24);
+      out.push({ type: d[p + 6], err: d[p + 7], id: (d[p + 8] | (d[p + 9] << 8) | (d[p + 10] << 16) | (d[p + 11] << 24)) >>> 0, body: d.slice(p + 12, p + 12 + len) });
+      p += 12 + len;
+    }
+  });
+  let reqId = 100;
+  const send = (cmd: number, body: number[], api = 2) => {
+    const id = ++reqId;
+    const f = [0x02, api, body.length & 0xff, (body.length >> 8) & 0xff, 0, 0, id & 0xff, id >> 8, 0, 0, cmd, ...body];
+    // deliver in two pieces to exercise reassembly
+    mon.receive(1, new Uint8Array(f.slice(0, 5)));
+    mon.receive(1, new Uint8Array(f.slice(5)));
+    return id;
+  };
+  const reply = (id: number) => out.find((o) => o.id === id);
+  const runUntilStop = (frames: number) => {
+    for (let i = 0; i < frames && running; i++) {
+      const r = c.runFrame();
+      if (r && mon.stopReason(r)) { running = false; mon.paused(); }
+    }
+  };
+  mon.opened(1);
+
+  const ping = send(0x81, []);
+  const stoppedOnCmd = out.some((o) => o.type === 0x62 && o.id === 0xffffffff);
+  check('binmon: ping stops the machine and replies', reply(ping)?.type === 0x81 && reply(ping)?.err === 0 && !running && stoppedOnCmd,
+    JSON.stringify(out.map((o) => [o.type.toString(16), o.err, o.id])));
+
+  const set = send(0x02, [0, 0x00, 0xc0, 0x03, 0xc0, 0, 0, 0, 0xde, 0xad, 0xbe, 0xef]);
+  const get = send(0x01, [0, 0x00, 0xc0, 0x03, 0xc0, 0, 0, 0]);
+  const g = reply(get)!;
+  check('binmon: memory set + get', reply(set)?.err === 0 && g.err === 0 && g.body[0] === 4 && [...g.body.slice(2)].join() === '222,173,190,239',
+    `set ${reply(set)?.err} get ${g?.err} ${[...(g?.body ?? [])]}`);
+
+  // set PC via registers set, read back with registers get
+  const rset = send(0x32, [0, 1, 0, 3, 0x03, 0x00, 0xc0]);
+  const rget = send(0x31, [0]);
+  const regs = reply(rget)!.body;
+  const regVal = (rid: number) => { for (let i = 2; i < regs.length; i += regs[i] + 1) if (regs[i + 1] === rid) return regs[i + 2] | (regs[i + 3] << 8); return -1; };
+  check('binmon: registers set + get', reply(rset)?.type === 0x31 && regVal(0x03) === 0xc000 && c.cpu.pc === 0xc000, `PC=${regVal(0x03).toString(16)}`);
+  c.cpu.pc = 0xe5cd; // back into the READY loop
+
+  const banks = reply(send(0x82, []))!;
+  check('binmon: banks available', new TextDecoder().decode(banks.body).includes('ram'));
+
+  // exec checkpoint inside the KERNAL's wait-for-key loop, then exit (resume)
+  const cpSet = send(0x12, [0xcf, 0xe5, 0xcf, 0xe5, 1, 1, 4, 0, 0]);
+  const cpId = reply(cpSet)!.body[0];
+  out.length = 0;
+  send(0xaa, []);
+  const resumed = out.some((o) => o.type === 0x63);
+  runUntilStop(50);
+  const hit = out.find((o) => o.type === 0x11 && o.id === 0xffffffff);
+  const stopped = out.find((o) => o.type === 0x62 && o.id === 0xffffffff);
+  check('binmon: checkpoint hit reports and stops', resumed && !running && hit?.body[0] === cpId && hit.body[4] === 1
+    && !!stopped && (stopped.body[0] | (stopped.body[1] << 8)) === 0xe5cf,
+    JSON.stringify(out.map((o) => [o.type.toString(16), o.id.toString(16), [...o.body.slice(0, 6)]])));
+
+  const pc0 = c.cpu.pc;
+  out.length = 0;
+  const adv = send(0x71, [0, 1, 0]);
+  check('binmon: advance one instruction', reply(adv)?.err === 0 && c.cpu.pc !== pc0 && out.some((o) => o.type === 0x62), `pc ${pc0.toString(16)} -> ${c.cpu.pc.toString(16)}`);
+
+  const bad = send(0x81, [], 9);
+  check('binmon: rejects unknown API version', reply(bad)?.err === 0x82);
 }
 
 // 5. fast virtual drive: save + load + directory

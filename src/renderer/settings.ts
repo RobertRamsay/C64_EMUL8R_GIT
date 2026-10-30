@@ -48,7 +48,7 @@ export interface Settings {
     autofireHz: number;
   };
   ultimate: { browseDir: string };
-  ui: { debugger: boolean; lastDir: string; recent: string[]; heatmap: boolean; history: boolean };
+  ui: { debugger: boolean; lastDir: string; recent: string[]; heatmap: boolean; history: boolean; binaryMonitor: boolean };
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -67,7 +67,7 @@ export const DEFAULT_SETTINGS: Settings = {
     autofireHz: 8,
   },
   ultimate: { browseDir: '' },
-  ui: { debugger: false, lastDir: '', recent: [], heatmap: false, history: true },
+  ui: { debugger: false, lastDir: '', recent: [], heatmap: false, history: true, binaryMonitor: false },
 };
 
 function merge<T>(def: T, val: any): T {

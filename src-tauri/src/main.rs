@@ -7,8 +7,10 @@
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::ipc::{InvokeBody, Request, Response};
@@ -35,6 +37,10 @@ struct LaunchArgs {
     attach_only: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rom_dirs: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    binmon: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    binmon_address: Option<String>,
 }
 
 fn num(s: Option<&String>) -> Option<i64> {
@@ -76,6 +82,9 @@ fn parse_args(argv: &[String]) -> LaunchArgs {
             "reuimage" | "reu-image" => { a.reu_image = next.cloned(); i += 1; if a.reu.is_none() { a.reu = Some(16384); } }
             "sid2" | "sid2address" => { a.sid2 = num(next); i += 1; }
             "warp" => a.warp = Some(true),
+            // VICE binary monitor: -binarymonitor [-binarymonitoraddress ip4://127.0.0.1:6502]
+            "binarymonitor" => a.binmon = Some(true),
+            "binarymonitoraddress" => { a.binmon_address = next.cloned(); a.binmon = Some(true); i += 1; }
             // VICE's ROM search path (';' on Windows, ':' elsewhere). The Dev Machine
             // passes its bundled vice folder here on macOS.
             "directory" | "romdir" => {
@@ -463,6 +472,76 @@ fn disable_browser_keys(window: &WebviewWindow) {
 #[cfg(windows)]
 const fn tauri_utils_icon_id() -> u16 { 32512 }
 
+// ---------------------------------------------------------------- binary monitor
+/// TCP side of the VICE binary monitor: bytes are relayed to the page, which
+/// speaks the protocol (src/core/binmon.ts).
+#[derive(Default)]
+struct Binmon {
+    conns: Mutex<HashMap<u32, TcpStream>>,
+    next: Mutex<u32>,
+    listening: Mutex<bool>,
+}
+
+#[derive(Serialize, Clone)]
+struct BinmonEvent {
+    conn: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    open: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    closed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<Vec<u8>>,
+}
+
+/// Listen on "ip4://host:port"; returns an error message, or None when listening.
+#[tauri::command]
+fn binmon_listen(app: AppHandle, address: String) -> Option<String> {
+    let state = app.state::<Binmon>();
+    if *state.listening.lock().unwrap() { return None; }
+    let a = address.trim().trim_start_matches("ip4://");
+    let (host, port) = match a.rsplit_once(':') {
+        Some((h, p)) => (if h.is_empty() { "127.0.0.1" } else { h }, p.parse().unwrap_or(6502u16)),
+        None => (if a.is_empty() { "127.0.0.1" } else { a }, 6502u16),
+    };
+    let listener = match TcpListener::bind((host, port)) { Ok(l) => l, Err(e) => return Some(e.to_string()) };
+    *state.listening.lock().unwrap() = true;
+    let app = app.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { continue };
+            let Ok(mut reader) = stream.try_clone() else { continue };
+            let _ = stream.set_nodelay(true);
+            let st = app.state::<Binmon>();
+            let id = { let mut n = st.next.lock().unwrap(); *n += 1; *n };
+            st.conns.lock().unwrap().insert(id, stream);
+            let _ = app.emit("binmon", BinmonEvent { conn: id, open: Some(true), closed: None, data: None });
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let mut buf = vec![0u8; 65536];
+                loop {
+                    match reader.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => { let _ = app.emit("binmon", BinmonEvent { conn: id, open: None, closed: None, data: Some(buf[..n].to_vec()) }); }
+                    }
+                }
+                app.state::<Binmon>().conns.lock().unwrap().remove(&id);
+                let _ = app.emit("binmon", BinmonEvent { conn: id, open: None, closed: Some(true), data: None });
+            });
+        }
+    });
+    None
+}
+
+#[tauri::command]
+fn binmon_send(app: AppHandle, request: Request<'_>) -> Result<(), String> {
+    let conn: u32 = request.headers().get("x-conn").and_then(|v| v.to_str().ok()).and_then(|s| s.parse().ok()).ok_or("missing x-conn")?;
+    let InvokeBody::Raw(data) = request.body() else { return Err("expected raw data".into()) };
+    let st = app.state::<Binmon>();
+    let mut conns = st.conns.lock().unwrap();
+    if let Some(s) = conns.get_mut(&conn) { s.write_all(data).map_err(|e| e.to_string())?; }
+    Ok(())
+}
+
 fn send_launch(app: &AppHandle, a: LaunchArgs) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();
@@ -485,6 +564,7 @@ fn main() {
     builder
         .plugin(tauri_plugin_dialog::init())
         .manage(Shell::default())
+        .manage(Binmon::default())
         .setup(|app| {
             #[cfg(windows)]
             if let Some(w) = app.get_webview_window("main") { set_taskbar_icon(&w); disable_browser_keys(&w); }
@@ -501,7 +581,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             roms_find, roms_palettes, open_file, save_file, choose_dir, read_file, read_text, write_file,
             list_dir, join_path, dirname, home_dir, app_args, settings_load, settings_save,
-            toggle_fullscreen, set_title, toggle_devtools, capture_config, capture_log, capture_eval, capture_quit
+            toggle_fullscreen, set_title, toggle_devtools, capture_config, capture_log, capture_eval, capture_quit,
+            binmon_listen, binmon_send
         ])
         .build(tauri::generate_context!())
         .expect("error while building C64EMUL8R")

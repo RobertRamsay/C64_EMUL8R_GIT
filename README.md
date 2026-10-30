@@ -36,6 +36,9 @@ C64EMUL8R.exe -reu -reusize 16384 -reuimage data.reu -sidextra 1 -sid2address 0x
 
 It runs as a single window. Launching it again hands the new file to the running emulator, which resets and autostarts it. That makes the edit → build → run loop quick.
 
+### Binary monitor
+`-binarymonitor` (optionally with `-binarymonitoraddress ip4://127.0.0.1:6502`, VICE's default) accepts VICE binary monitor clients, so IDE debuggers written for VICE can drive C64EMUL8R. *Settings → Machine → Binary monitor* turns it on at every start. As in VICE, any command stops the emulation until the Exit command. Supported: memory get/set (main CPU and drive 8), checkpoints (exec, load, store, temporary, count-only) with conditions, registers get/set, advance instructions, execute until return, keyboard feed, reset, autostart, ping, banks and registers available, display get, palette get and VICE info, plus the stopped, resumed, JAM and checkpoint-hit events. Snapshots, resources, joyport and userport commands reply "not supported". `python tools/binmon_client.py` checks a running instance end to end.
+
 ### C64 Dev Machine
 C64EMUL8R ships inside C64 Dev Machine next to VICE. `npm run bundle:devmachine` packages it and copies it into the Dev Machine project as Included Files (`datafiles/c64emul8r`), so every Dev Machine build carries it. The bundled copy reads its ROMs from the Dev Machine's own VICE folder. Pass a different project path with `node tools/bundle-devmachine.mjs <path>`. The Dev Machine repo stores the bundle with Git LFS because `C64EMUL8R.exe` is over GitHub's 100 MB file limit. Run the command again after an emulator change.
 
@@ -45,7 +48,7 @@ The Mac Dev Machine bundles it too, as one zip of the signed app. On a Mac, `npm
 
 Exported `_run.bat` launchers always use VICE.
 
-`npm test` runs the headless smoke tests: boot, BASIC, PRG autostart, fast-drive save/load/directory, and true-1541 load/save.
+`npm test` runs the headless smoke tests: boot, BASIC, PRG autostart, a mid-line sprite register change, the binary monitor protocol, fast-drive save/load/directory, and true-1541 load/save.
 
 ### ROMs
 The Commodore ROMs are copyrighted, so they are **not** included. Don't commit them. When the app starts it looks for `basic`, `kernal`, `chargen` and `dos1541` in these places:
@@ -84,6 +87,7 @@ Palettes (`.vpl`) found next to the VICE ROMs are added to the palette list.
 - Live memory map heatmap, as in C64 Debugger
 - CPU history of the last 4096 instructions
 - VICE-compatible monitor: `m d a > f t c h r g z n ret break watch raster del bank l s ll al io sp screen cpuhistory`, and so on
+- VICE binary monitor protocol over TCP for IDE debuggers (`-binarymonitor`)
 - Label import from VICE `.lbl` and KickAss `.sym`
 - Viewers for VIC state, sprites, and graphics (charset, screen, bitmap and sprites at any address)
 - SID voice scopes with mute, CIA timers and ports, and 1541 CPU/VIA/head state with drive breakpoints
@@ -101,4 +105,4 @@ Palettes (`.vpl`) found next to the VICE ROMs are added to the palette list.
 
 ## Known limitations / next steps
 - The SID filter is our own cycle-clocked model rather than a reSID-accurate one.
-- Not implemented yet: 1541 shift register, VIA2 pulse counting, a non-1541 drive (1571/1581), paddles and mouse, and the VICE binary monitor protocol for IDE integration.
+- Not implemented yet: 1541 shift register, VIA2 pulse counting, a non-1541 drive (1571/1581), paddles and mouse.

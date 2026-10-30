@@ -7,6 +7,7 @@ import { PALETTES, parseVpl } from '../core/palettes';
 import { attachMedia, detectMedia, parseSid, startSid, SidInfo, MEDIA_EXTENSIONS } from '../core/loaders';
 import { D64 } from '../core/d64';
 import { parseLabels } from '../core/monitor';
+import { BinaryMonitor } from '../core/binmon';
 import { deserializeState, serializeState } from '../core/snapshot';
 import { AudioOut } from './audio';
 import { Video } from './video';
@@ -46,6 +47,8 @@ export class App {
   private pauseBtn!: HTMLButtonElement;
   private warpBtn!: HTMLButtonElement;
   private dbgBtn!: HTMLButtonElement;
+  binmon: BinaryMonitor | null = null;
+  private binmonQueue: Promise<unknown> = Promise.resolve();
 
   async start(): Promise<void> {
     this.settings = await loadSettings();
@@ -62,6 +65,7 @@ export class App {
     this.bindEvents();
     await this.loadRoms();
     requestAnimationFrame(this.tick);
+    if (this.settings.ui.binaryMonitor) void this.startBinaryMonitor();
     this.handleLaunch(await window.host.args());
     window.host.onLaunchArgs((a) => this.handleLaunch(a));
   }
@@ -285,8 +289,9 @@ export class App {
   }
 
   /** Options from the command line or a second launch (VICE-style or our own). */
-  async handleLaunch(a: { file?: string; reu?: number; reuImage?: string; sid2?: number; warp?: boolean; attachOnly?: boolean }): Promise<void> {
+  async handleLaunch(a: { file?: string; reu?: number; reuImage?: string; sid2?: number; warp?: boolean; attachOnly?: boolean; binmon?: boolean; binmonAddress?: string }): Promise<void> {
     if (!a) return;
+    if (a.binmon) await this.startBinaryMonitor(a.binmonAddress);
     // session overrides: they apply until settings are changed, and are not saved
     if (a.reu !== undefined) this.c64.applyConfig({ reuSize: a.reu });
     if (a.sid2 !== undefined) this.c64.applyConfig({ sid2Address: a.sid2 });
@@ -410,20 +415,66 @@ export class App {
   togglePause(): void { if (this.running) this.pause(); else this.resume(); }
 
   pause(): void {
+    const was = this.running;
     this.running = false;
     this.input.releaseAll();
     this.updatePauseUi();
     this.debugger.refresh(true);
     this.showBeam();
+    if (was) this.binmon?.paused();
   }
 
   resume(): void {
     if (!this.c64.hasRoms) return;
+    const was = this.running;
     this.running = true;
     this.video.beamLine = -1;
     this.updatePauseUi();
     this.lastTime = performance.now();
     this.acc = 0;
+    if (!was) this.binmon?.resumed();
+  }
+
+  // ------------------------------------------------------- binary monitor
+  /** Accept VICE binary monitor clients (IDE debuggers) on "ip4://host:port". */
+  async startBinaryMonitor(address = 'ip4://127.0.0.1:6502'): Promise<void> {
+    if (this.binmon) return;
+    const err = await window.host.binmonListen(address);
+    if (err) {
+      toast(`Binary monitor: ${err}`, true, 5000);
+      this.debugger.log(`Binary monitor could not listen on ${address}: ${err}`);
+      return;
+    }
+    const mon = new BinaryMonitor({
+      c64: this.c64,
+      isRunning: () => this.running,
+      stop: () => this.pause(),
+      go: () => this.resume(),
+      refresh: () => { this.showBeam(); this.debugger.refresh(true); },
+      reset: (hard) => { this.sidInfo = null; if (hard) this.c64.hardReset(); else this.c64.reset(); this.showBeam(); this.debugger.refresh(true); },
+      autostart: async (path, run) => {
+        try {
+          const data: Uint8Array = await window.host.readFile(path);
+          const wasRunning = this.running;
+          this.attach(path.split(/[\\/]/).pop() ?? path, data, run, path);
+          if (this.running && !wasRunning) this.binmon?.resumed();
+          return true;
+        } catch { return false; }
+      },
+      palette: () => (this.palettes[this.settings.video.palette] ?? PALETTES.Colodore)
+        .map((hx) => [parseInt(hx.slice(0, 2), 16), parseInt(hx.slice(2, 4), 16), parseInt(hx.slice(4, 6), 16)]),
+      log: (m) => this.debugger.log(m),
+    }, (conn, data) => {
+      // keep replies in order: the host sends are asynchronous
+      this.binmonQueue = this.binmonQueue.then(() => window.host.binmonSend(conn, data)).catch(() => {});
+    });
+    this.binmon = mon;
+    window.host.onBinmon((e) => {
+      if (e.open) mon.opened(e.conn);
+      if (e.data) mon.receive(e.conn, e.data instanceof Uint8Array ? e.data : new Uint8Array(e.data));
+      if (e.closed) mon.closed(e.conn);
+    });
+    this.debugger.log(`Binary monitor listening on ${address}`);
   }
 
   /** Warp while requested, while autostart loads, or (auto warp) while a drive/tape motor runs. */
@@ -530,6 +581,8 @@ export class App {
   }
 
   private onStop(r: StopReason): void {
+    // a checkpoint that only counts hits keeps the machine running
+    if (this.binmon && !this.binmon.stopReason(r)) return;
     this.pause();
     if (r.kind !== 'step') {
       if (!this.settings.ui.debugger) this.setDebugger(true);

@@ -97,6 +97,9 @@ const renderers: Record<Page, (app: App, el: HTMLElement) => void | (() => void)
         'True drive emulation runs the real 1541 DOS and supports fast loaders. The fast virtual drive traps KERNAL LOAD/SAVE and loads instantly but only works with standard loaders.'),
       field('Auto warp', checkbox(m.autoWarp, 'Run at full speed while the 1541 or datasette motor is on', (v) => { m.autoWarp = v; app.persist(); }),
         'Loading (including in-game multi-loads) runs as fast as your PC allows; sound and normal speed return when the drive stops.'),
+      field('Binary monitor', checkbox(app.settings.ui.binaryMonitor, 'Accept VICE binary monitor connections on 127.0.0.1:6502', (v) => {
+        app.settings.ui.binaryMonitor = v; app.persist(); if (v) void app.startBinaryMonitor();
+      }), 'Lets IDE debuggers and tools written for the VICE -binarymonitor option drive C64EMUL8R. Turning it off takes effect after a restart. The -binarymonitor command-line option starts it too.'),
     );
   },
 

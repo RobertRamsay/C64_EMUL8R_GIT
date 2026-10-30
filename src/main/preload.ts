@@ -2,6 +2,9 @@
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
+/** A client connected, sent data or went away. */
+export interface BinmonEvent { conn: number; open?: boolean; closed?: boolean; data?: Uint8Array | number[] }
+
 const api = {
   findRoms: (preferredDir?: string) => ipcRenderer.invoke('roms:find', preferredDir),
   listPalettes: (romPath?: string) => ipcRenderer.invoke('roms:palettes', romPath),
@@ -21,8 +24,12 @@ const api = {
   toggleFullscreen: () => ipcRenderer.invoke('win:fullscreen'),
   setTitle: (t: string) => ipcRenderer.invoke('win:title', t),
   pathForFile: (f: File) => webUtils.getPathForFile(f),
+  /** VICE binary monitor: listen on "ip4://host:port"; resolves to an error message or null */
+  binmonListen: (address: string): Promise<string | null> => ipcRenderer.invoke('binmon:listen', address),
+  binmonSend: (conn: number, data: Uint8Array) => ipcRenderer.invoke('binmon:send', conn, data),
+  onBinmon: (cb: (e: BinmonEvent) => void) => { ipcRenderer.on('binmon', (_e, ev) => cb(ev)); },
   /** command line of a second launch (single instance) */
-  onLaunchArgs: (cb: (a: { file?: string; reu?: number; reuImage?: string; sid2?: number; warp?: boolean; attachOnly?: boolean }) => void) =>
+  onLaunchArgs: (cb: (a: { file?: string; reu?: number; reuImage?: string; sid2?: number; warp?: boolean; attachOnly?: boolean; binmon?: boolean; binmonAddress?: string }) => void) =>
     ipcRenderer.on('launch-args', (_e, a) => cb(a)),
 };
 
