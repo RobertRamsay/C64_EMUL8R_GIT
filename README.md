@@ -60,7 +60,7 @@ Palettes (`.vpl`) found next to the VICE ROMs are added to the palette list.
 
 **Emulation**
 - 6510 CPU: every bus access is timed to the cycle (dummy reads/writes, RMW double writes, all undocumented opcodes, IRQ/NMI latency).
-- VIC-II: emulated cycle by cycle in PAL 6569 and NTSC 6567R8 timing. Covers badlines and BA stalls, all graphics modes, sprite DMA, priorities and collisions, the border state machine, raster IRQs and mid-line register changes.
+- VIC-II: emulated cycle by cycle in PAL 6569 and NTSC 6567R8 timing. Covers badlines and BA stalls, all graphics modes, sprite DMA, priorities and collisions, the border state machine, raster IRQs and mid-line register changes, sprite registers included.
 - SID 6581/8580: cycle-clocked oscillators and ADSR, ring mod, sync, combined waveforms, and a modelled filter. Supports an optional second SID for stereo.
 - Two CIA 6526 chips: timers, TOD, ICR, keyboard matrix and joysticks.
 - 1541 true drive emulation: drive 6502, two VIA chips, IEC bus and GCR disk rotation. It reads and writes, so fast loaders work. A fast virtual drive using KERNAL traps is also available.
@@ -100,6 +100,5 @@ Palettes (`.vpl`) found next to the VICE ROMs are added to the palette list.
 - `tools/headless.ts`: smoke tests
 
 ## Known limitations / next steps
-- The VIC renders sprites once per line, so sprite register changes in the middle of a line are not shown.
-- The SID filter is an approximation rather than a reSID-level model.
+- The SID filter is our own cycle-clocked model rather than a reSID-accurate one.
 - Not implemented yet: 1541 shift register, VIA2 pulse counting, a non-1541 drive (1571/1581), paddles and mouse, and the VICE binary monitor protocol for IDE integration.

@@ -33,6 +33,8 @@ export const SCREEN_W = 384;
 /** first visible cycle (x = -8) and last (x = 375) */
 const FIRST_VIS_CYCLE = 13;
 const LAST_VIS_CYCLE = 60;
+/** first cycle after the line's sprite fetches; sprite output runs from here */
+const SPRITE_START_CYCLE = 11;
 
 export class VICII {
   model: VicModel = PAL;
@@ -65,9 +67,11 @@ export class VICII {
   private spExpFF = new Uint8Array(8).fill(1);
   private spData = new Uint8Array(24);
   private spFetched = new Uint8Array(8);
-  private spLineData = new Uint8Array(24);
-  private spLineFetched = new Uint8Array(8);
-  private spLineEnabled = 0;
+  // sprite line output: data latched once this line's fetches are done, then
+  // shifted out pixel by pixel from the X position where each sprite starts
+  private spLineD = new Int32Array(8);
+  private spLineMask = 0;
+  private spPos = new Int16Array(8);   // pixels shifted out; -1 waiting for X, -2 finished
   private spPtr = new Uint8Array(8);
   spSpriteColl = 0;
   spBgColl = 0;
@@ -253,6 +257,17 @@ export class VICII {
     }
 
     switch (c) {
+      case 10: {
+        // all of this line's sprite data has arrived (sprite 7's s-access ends in cycle 9)
+        let mask = 0;
+        for (let i = 0; i < 8; i++) {
+          const d = this.spFetched[i] ? (this.spData[i * 3] << 16) | (this.spData[i * 3 + 1] << 8) | this.spData[i * 3 + 2] : 0;
+          this.spLineD[i] = d;
+          if (d) mask |= 1 << i;
+        }
+        this.spLineMask = mask;
+        break;
+      }
       case 14:
         this.vc = this.vcBase;
         this.vmli = 0;
@@ -281,11 +296,6 @@ export class VICII {
         }
         break;
       }
-      case 57:
-        // snapshot sprite data for rendering of this line
-        this.spLineData.set(this.spData);
-        this.spLineFetched.set(this.spFetched);
-        break;
       case 58:
         if (this.rc === 7) {
           this.vcBase = this.vc;
@@ -477,10 +487,26 @@ export class VICII {
       }
       return;
     }
-    if (c < FIRST_VIS_CYCLE || c > LAST_VIS_CYCLE) {
-      if (c === LAST_VIS_CYCLE + 3 && visibleLine) this.finishLine();
-      return;
+    if (c >= FIRST_VIS_CYCLE && c <= LAST_VIS_CYCLE) this.renderBackground(c, x0, visibleLine);
+    // sprites are shifted out across the whole line, hidden parts included, so
+    // they collide and start at the right X even outside the visible window
+    if (visibleLine && c >= SPRITE_START_CYCLE && this.spLineMask) {
+      if (c === SPRITE_START_CYCLE) {
+        this.spPos.fill(-1);
+        // X positions of cycles 1..10, before this line's data was complete
+        for (let x = 8 - 112; x < x0; x++) this.spritePixel(x);
+      }
+      for (let p = 0; p < 8; p++) this.spritePixel(x0 + p);
     }
+    if (c === LAST_VIS_CYCLE + 3 && visibleLine) this.finishLine();
+  }
+
+  private renderBackground(c: number, x0: number, visibleLine: boolean): void {
+    const r11 = this.regs[0x11];
+    const rsel = r11 & 0x08, csel = this.regs[0x16] & 0x08;
+    const top = rsel ? 51 : 55, bottom = rsel ? 251 : 247;
+    const left = csel ? 24 : 31, right = csel ? 344 : 335;
+    const raster = this.raster;
     const xs = this.regs[0x16] & 7;
     const borderCol = this.regs[0x20] & 15;
     const bg0 = this.regs[0x21] & 15;
@@ -506,76 +532,63 @@ export class VICII {
     }
   }
 
-  /** Composite sprites and border for the current line into the framebuffer. */
+  /** Write the finished line (sprites already composited) into the framebuffer. */
   private finishLine(): void {
-    const lc = this.lineColor, lf = this.lineFg, lb = this.lineBorder;
-    const en = this.spLineFetched;
-    const r = this.regs;
-    let anySprites = 0;
-    for (let i = 0; i < 8; i++) if (en[i]) anySprites |= 1 << i;
-    if (anySprites && this.showSprites) this.drawSprites(anySprites);
-    else if (anySprites) this.drawSprites(anySprites, true);
+    const lc = this.lineColor, lb = this.lineBorder;
     const row = (this.raster - this.model.firstVisibleLine) * SCREEN_W;
     const fb = this.framebuffer;
     for (let i = 0; i < SCREEN_W; i++) fb[row + i] = lb[i] !== 0xff ? lb[i] : lc[i];
-    void r;
   }
 
-  private spLinePix = new Int8Array(512);   // sprite index occupying pixel (-1 none)
-  private drawSprites(mask: number, collisionsOnly = false): void {
-    const r = this.regs;
-    const lc = this.lineColor, lf = this.lineFg;
-    const occ = this.spLinePix;
-    occ.fill(-1);
-    const mc = r[0x1c], xexp = r[0x1d], prio = r[0x1b];
-    const mc0 = r[0x25] & 15, mc1 = r[0x26] & 15;
-    let ssColl = 0, sbColl = 0;
+  /**
+   * One sprite pixel at line position x (x = 8*cycle - 112). A sprite starts
+   * shifting out when the X counter equals its X register, and colour,
+   * multicolour, expansion and priority are read for each pixel, so register
+   * writes take effect from the pixel the beam is on.
+   */
+  private spritePixel(x: number): void {
     const lineW = this.model.cyclesPerLine * 8;
-    // sprite 0 has the highest priority: the first sprite to claim a pixel wins,
-    // then the winner's priority bit decides against background foreground
+    const sx = x < 0 ? x + lineW : x;
+    const r = this.regs;
+    let hits = 0, first = -1, firstCol = 0;
     for (let i = 0; i < 8; i++) {
-      if (!(mask & (1 << i))) continue;
-      const d = (this.spLineData[i * 3] << 16) | (this.spLineData[i * 3 + 1] << 8) | this.spLineData[i * 3 + 2];
-      if (d === 0) continue;
-      const color = r[0x27 + i] & 15;
-      const exp = xexp & (1 << i) ? 2 : 1;
-      const isMc = mc & (1 << i);
-      const behind = prio & (1 << i);
-      const sx = this.spX[i];
-      for (let b = 0; b < 24; b++) {
-        let pc: number;
-        if (isMc) {
-          const v = (d >> (22 - (b & ~1))) & 3;
-          if (!v) continue;
-          pc = v === 1 ? mc0 : v === 2 ? color : mc1;
-        } else {
-          if (!((d >> (23 - b)) & 1)) continue;
-          pc = color;
-        }
-        for (let e = 0; e < exp; e++) {
-          let x = sx + b * exp + e;
-          if (x >= lineW) x -= lineW;
-          const sxp = x >= lineW - 8 ? x - lineW : x;
-          const idx = sxp + 8;
-          const inView = idx >= 0 && idx < SCREEN_W;
-          if (inView && lf[idx]) sbColl |= 1 << i;
-          const ox = occ[x & 511];
-          if (ox >= 0) { ssColl |= (1 << i) | (1 << ox); continue; }
-          occ[x & 511] = i;
-          if (!inView || collisionsOnly) continue;
-          if (behind && lf[idx]) continue;
-          lc[idx] = pc;
-        }
+      if (!(this.spLineMask & (1 << i))) continue;
+      let pos = this.spPos[i];
+      if (pos < 0) {
+        if (pos === -2 || this.spX[i] !== sx) continue;
+        pos = 0;
       }
+      const exp = r[0x1d] & (1 << i) ? 2 : 1;
+      const b = exp === 2 ? pos >> 1 : pos;
+      const d = this.spLineD[i];
+      let pc = -1;
+      if (r[0x1c] & (1 << i)) {
+        const v = (d >> (22 - (b & ~1))) & 3;
+        if (v) pc = v === 1 ? r[0x25] & 15 : v === 2 ? r[0x27 + i] & 15 : r[0x26] & 15;
+      } else if ((d >> (23 - b)) & 1) {
+        pc = r[0x27 + i] & 15;
+      }
+      this.spPos[i] = ++pos >= 24 * exp ? -2 : pos;
+      if (pc < 0) continue;
+      hits |= 1 << i;
+      // sprite 0 has the highest priority: the first sprite with a pixel wins
+      if (first < 0) { first = i; firstCol = pc; }
     }
-    if (ssColl) {
+    if (!hits) return;
+    if (hits & (hits - 1)) {
       if (this.spSpriteColl === 0) this.raiseIrq(0x04);
-      this.spSpriteColl |= ssColl;
+      this.spSpriteColl |= hits;
     }
-    if (sbColl) {
+    const idx = x + 8;
+    if (idx < 0 || idx >= SCREEN_W) return;
+    const fg = this.lineFg[idx];
+    if (fg) {
       if (this.spBgColl === 0) this.raiseIrq(0x02);
-      this.spBgColl |= sbColl;
+      this.spBgColl |= hits;
     }
+    // the winner's priority bit decides against background foreground
+    if (!this.showSprites || (fg && r[0x1b] & (1 << first))) return;
+    this.lineColor[idx] = firstCol;
   }
 
   // ---- debugger helpers ----

@@ -98,6 +98,29 @@ function check(name: string, ok: boolean, detail = ''): void {
   check('PRG autostart', screenText(c).includes('HELLO'), screenText(c));
 }
 
+// 4b. sprite colour written mid-line: sprite 0 (x-expanded, solid, X=100 Y=100)
+// is red; on raster line 110 the program turns it green while the beam is
+// inside it and back to red at the start of line 111
+{
+  const c = machine(false);
+  const prog = [
+    0x01, 0x08, 0x0b, 0x08, 0x0a, 0x00, 0x9e, 0x32, 0x30, 0x36, 0x31, 0x00, 0x00, 0x00, 0x78, 0xa9, 0x7f, 0x8d, 0x0d, 0xdc,
+    0xa9, 0xff, 0xa2, 0x3e, 0x9d, 0xc0, 0x3f, 0xca, 0x10, 0xfa, 0xa9, 0xff, 0x8d, 0xf8, 0x07, 0xa9, 0x64, 0x8d, 0x00, 0xd0,
+    0x8d, 0x01, 0xd0, 0xa9, 0x01, 0x8d, 0x15, 0xd0, 0x8d, 0x1d, 0xd0, 0xa9, 0x02, 0x8d, 0x27, 0xd0, 0xa9, 0x6e, 0xcd, 0x12,
+    0xd0, 0xd0, 0xfb, 0xa2, 0x04, 0xca, 0xd0, 0xfd, 0xa9, 0x05, 0x8d, 0x27, 0xd0, 0xa9, 0x6f, 0xcd, 0x12, 0xd0, 0xd0, 0xfb,
+    0x4c, 0x32, 0x08,
+  ];
+  attachMedia(c, 'midline.prg', new Uint8Array(prog), true);
+  runFrames(c, 200);
+  const W = 384, first = c.vic.model.firstVisibleLine;
+  const spriteRow = (line: number) => Array.from(c.vic.framebuffer.slice((line - first) * W + 108, (line - first) * W + 156));
+  const mid = spriteRow(110);
+  const split = mid.indexOf(5);
+  const ok = split > 0 && mid.slice(0, split).every((v) => v === 2) && mid.slice(split).every((v) => v === 5)
+    && spriteRow(109).every((v) => v === 2) && spriteRow(111).every((v) => v === 2);
+  check('sprite colour changed mid-line', ok, `line 109: ${spriteRow(109).join('')}\nline 110: ${mid.join(' ')}\nline 111: ${spriteRow(111).join('')}`);
+}
+
 // 5. fast virtual drive: save + load + directory
 {
   const c = machine(false);
