@@ -112,7 +112,9 @@ export function startSid(c64: C64, info: SidInfo, song: number): void {
   const bank = overlaps(0xe000, 0x10000) || overlaps(0xd000, 0xe000) ? 0x35 : overlaps(0xa000, 0xc000) ? 0x36 : 0x37;
   const cia = info.type === 'PSID' && !!(info.speed & (1 << Math.min(31, song)));
   const play = info.play;
-  const useKernalIrq = bank === 0x37;
+  // with the KERNAL mapped ($37, or $36 for tunes under BASIC) the CPU takes its
+  // IRQ vector from ROM, so hook the KERNAL's $0314 vector instead of $FFFE
+  const useKernalIrq = bank !== 0x35;
   // assemble the driver in two passes to resolve the IRQ label
   const build = (irqAddr: number) => {
     const L: string[] = [

@@ -6,7 +6,7 @@ import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { C64 } from '../src/core/c64';
 import { D64 } from '../src/core/d64';
-import { attachMedia } from '../src/core/loaders';
+import { attachMedia, parseSid, startSid } from '../src/core/loaders';
 import { BinaryMonitor } from '../src/core/binmon';
 
 const candidates = [
@@ -206,6 +206,27 @@ function check(name: string, ok: boolean, detail = ''): void {
 
   const bad = send(0x81, [], 9);
   check('binmon: rejects unknown API version', reply(bad)?.err === 0x82);
+}
+
+// 4d. SID player with a tune under the BASIC ROM ($A000): its play routine
+// must still be called every frame (it counts calls at $C800)
+{
+  const c = machine(false);
+  runFrames(c, 150);
+  const hdr = new Uint8Array(0x7c);
+  hdr.set([0x50, 0x53, 0x49, 0x44], 0);                 // PSID
+  hdr[5] = 2; hdr[7] = 0x7c;                            // version 2, data at $7C
+  hdr[8] = 0xa0; hdr[9] = 0x00;                         // load $A000
+  hdr[10] = 0xa0; hdr[11] = 0x00;                       // init $A000
+  hdr[12] = 0xa0; hdr[13] = 0x01;                       // play $A001
+  hdr[15] = 1; hdr[17] = 1;                             // 1 song, start at 1
+  const code = [0x60, 0xee, 0x00, 0xc8, 0x60];          // init: RTS / play: INC $C800, RTS
+  const sid = new Uint8Array(hdr.length + code.length);
+  sid.set(hdr); sid.set(code, hdr.length);
+  c.ram[0xc800] = 0;
+  startSid(c, parseSid(sid), 0);
+  runFrames(c, 50);
+  check('SID player calls play for a tune under BASIC', c.ram[0xc800] >= 40, `play calls in 50 frames: ${c.ram[0xc800]}`);
 }
 
 // 5. fast virtual drive: save + load + directory
