@@ -286,6 +286,49 @@ function check(name: string, ok: boolean, detail = ''): void {
   check('REU save states share unwritten pages and restore', shared && restored && rewound, `shared ${shared}, restored ${restored}, rewound ${rewound}`);
 }
 
+// 4g. Ultimate turbo registers: $D031 speed index + badline bit, $D030 turbo enable
+{
+  const c = machine(false);
+  c.applyConfig({ turbo: 8, turboControl: 'manual' });
+  runFrames(c, 10);
+  c.poke(0xd031, 0x8f);
+  const manual = c.peek(0xd031) === 0xff && c.cpuMhz === 8;
+
+  c.applyConfig({ turboControl: 'registers' });
+  c.poke(0xd031, 0x8f);
+  const fast = c.cpuMhz === 64 && !c.badlineStalls && c.peek(0xd031) === 0x8f && c.peek(0xd030) === 0xff;
+  c.poke(0xd031, 0x05);
+  const slow = c.cpuMhz === 8 && c.badlineStalls && c.peek(0xd031) === 0x05;
+
+  c.applyConfig({ turboControl: 'enableBit' });
+  c.poke(0xd031, 0x0e);
+  c.poke(0xd030, 0x00);
+  const off = c.cpuMhz === 1 && c.badlineStalls && c.peek(0xd030) === 0xfe;
+  c.poke(0xd030, 0x01);
+  const on = c.cpuMhz === 48 && c.peek(0xd030) === 0xff;
+  c.reset();
+  const reset = c.cpuMhz === 8 && !c.badlineStalls;
+  check('turbo registers $D030/$D031', manual && fast && slow && off && on && reset, JSON.stringify({ manual, fast, slow, off, on, reset }));
+}
+
+// 4h. badline timing costs the CPU cycles in turbo: count INC passes in a frame
+{
+  const passes = (badlines: boolean) => {
+    const c = machine(false);
+    c.applyConfig({ turbo: 8, badlines });
+    runFrames(c, 150);
+    // SEI / loop: INC $C000 / BNE loop / INC $C001 / JMP loop
+    c.ram.set([0x78, 0xee, 0x00, 0xc0, 0xd0, 0xfb, 0xee, 0x01, 0xc0, 0x4c, 0x01, 0xc1], 0xc100);
+    c.cpu.pc = 0xc100;
+    runFrames(c, 1);
+    c.ram[0xc000] = c.ram[0xc001] = 0;
+    runFrames(c, 1);
+    return c.ram[0xc000] | (c.ram[0xc001] << 8);
+  };
+  const on = passes(true), off = passes(false);
+  check('badline timing halts the CPU in turbo', on < off && off - on > 50, `passes with badlines ${on}, without ${off}`);
+}
+
 // 5. fast virtual drive: save + load + directory
 {
   const c = machine(false);

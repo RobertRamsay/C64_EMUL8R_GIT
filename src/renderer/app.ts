@@ -733,7 +733,7 @@ export class App {
     document.getElementById('st-speed')!.textContent = this.running ? `${this.speedPct}%` : '';
     const cfg = this.c64.config;
     document.getElementById('st-model')!.textContent =
-      `${cfg.video} · SID ${cfg.sidModel}${cfg.sid2Address ? ' + $' + hex4(cfg.sid2Address) : ''}${cfg.reuSize ? ' · REU ' + (cfg.reuSize >= 1024 ? cfg.reuSize / 1024 + 'MB' : cfg.reuSize + 'K') : ''}${cfg.turbo > 1 ? ' · ' + cfg.turbo + 'MHz' : ''}`;
+      `${cfg.video} · SID ${cfg.sidModel}${cfg.sid2Address ? ' + $' + hex4(cfg.sid2Address) : ''}${cfg.reuSize ? ' · REU ' + (cfg.reuSize >= 1024 ? cfg.reuSize / 1024 + 'MB' : cfg.reuSize + 'K') : ''}${this.c64.cpuMhz > 1 ? ' · ' + this.c64.cpuMhz + 'MHz' : ''}`;
   }
 }
 

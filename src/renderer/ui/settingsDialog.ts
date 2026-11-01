@@ -2,6 +2,7 @@
 // Ultimate options and keyboard shortcut reference.
 
 import type { App } from '../app';
+import type { TurboControl } from '../../core/c64';
 import { ALL_C64_KEYS, C64Key } from '../../core/keyboard';
 import { DEVICE_NAMES } from '../input';
 import { JOY_DIRS, JoyDir, REU_SIZES, SID2_ADDRESSES, TURBO_SPEEDS, keyLabel } from '../settings';
@@ -285,6 +286,8 @@ const renderers: Record<Page, (app: App, el: HTMLElement) => void | (() => void)
       h('div', { class: 'page-title' }, 'C64 Ultimate / Ultimate-II+ features'),
       field('RAM Expansion Unit', select(m.reuSize, REU_SIZES.map((s) => [s, s === 0 ? 'Off' : s >= 1024 ? `${s / 1024} MB` : `${s} KB`] as [number, string]), (v) => { m.reuSize = v; reconfig(); }), '1700/1764/1750 compatible REU at $DF00 with DMA transfers, up to 16 MB like the Ultimate.'),
       field('CPU turbo', select(m.turbo, TURBO_SPEEDS.map((s) => [s, s === 1 ? '1 MHz (stock)' : `${s} MHz`] as [number, string]), (v) => { m.turbo = v; reconfig(); }), 'Ultimate 64 style turbo: the 6510 runs faster while video, timers and SID stay at normal speed.'),
+      field('Badline timing', checkbox(m.badlines, 'Halt the CPU for badlines and sprite DMA in turbo', (v) => { m.badlines = v; reconfig(); }), 'As on a stock C64 the VIC steals these cycles; off gives turbo code all of them. At 1 MHz the CPU always halts.'),
+      field('Turbo control', select(m.turboControl, [['manual', 'Manual (settings only)'], ['registers', 'U64 Turbo Registers ($D031)'], ['enableBit', 'Turbo Enable Bit ($D030 + $D031)']] as [TurboControl, string][], (v) => { m.turboControl = v; reconfig(); }), 'Lets programs change speed and badline timing: $D031 bits 0–3 pick the speed (index 15 = 64 MHz), bit 7 turns badline timing off; $D030 bit 0 = 0 drops to 1 MHz with badlines. A reset returns to these settings.'),
       field('Command interface', checkbox(m.uci, 'Enable Ultimate Command Interface at $DF1C–$DF1F', (v) => { m.uci = v; reconfig(); }), 'Lets software detect the Ultimate (identification byte $C9).'),
       field('File browser root', h('div', { class: 'row' },
         h('span', { class: 'mono' }, app.settings.ultimate.browseDir || '(home folder)'),

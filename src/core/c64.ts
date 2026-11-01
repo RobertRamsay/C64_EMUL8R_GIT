@@ -26,6 +26,14 @@ export interface MachineConfig {
   reuSize: number;
   /** CPU speed multiplier (Ultimate 64 turbo) */
   turbo: number;
+  /** turbo: the CPU halts while the VIC holds BA low (badlines, sprite DMA); 1 MHz always does */
+  badlines: boolean;
+  /**
+   * How programs can change the turbo, as the Ultimate's Turbo Control setting:
+   * 'manual' only the settings ($D030/$D031 read $FF), 'registers' $D031,
+   * 'enableBit' $D031 and the $D030 turbo enable bit
+   */
+  turboControl: TurboControl;
   trueDrive: boolean;
   driveEnabled: boolean;
   /** Ultimate command interface at $DF1C */
@@ -33,8 +41,13 @@ export interface MachineConfig {
   sampleRate: number;
 }
 
+export type TurboControl = 'manual' | 'registers' | 'enableBit';
+
+/** MHz for each $D031 speed index (the Ultimate 64 Elite-II and C64 Ultimate table) */
+export const TURBO_INDEX_MHZ = [1, 2, 3, 4, 6, 8, 10, 12, 14, 16, 20, 24, 32, 40, 48, 64];
+
 export const DEFAULT_CONFIG: MachineConfig = {
-  video: 'PAL', sidModel: '6581', sid2Address: 0, sid2Model: '8580', reuSize: 0, turbo: 1,
+  video: 'PAL', sidModel: '6581', sid2Address: 0, sid2Model: '8580', reuSize: 0, turbo: 1, badlines: false, turboControl: 'manual',
   trueDrive: true, driveEnabled: true, uci: false, sampleRate: 44100,
 };
 
@@ -92,6 +105,13 @@ export class C64 implements CpuBus, VicMemory {
 
   cycles = 0;
   private turbo = 1;
+  /** the CPU halts while BA is low */
+  private baStall = true;
+  // turbo registers: $D031 speed (MHz, -1 = settings) and badline timing
+  // (null = settings), and the $D030 turbo enable bit
+  private regMhz = -1;
+  private regBadlines: boolean | null = null;
+  private regTurboOn = true;
   /** interrupt lines changed since the CPU last sampled them */
   private linesChanged = true;
   private turboSub = 0;
@@ -207,8 +227,9 @@ export class C64 implements CpuBus, VicMemory {
     const prev = this.config;
     this.config = { ...this.config, ...c };
     const cfg = this.config;
-    this.turbo = Math.max(1, cfg.turbo);
     this.turboSub = 0;
+    if (prev.turbo !== cfg.turbo || prev.badlines !== cfg.badlines || prev.turboControl !== cfg.turboControl) this.clearTurboRegs();
+    else this.applySpeed();
     if (prev.video !== cfg.video || !this.vic.model) this.vic.setModel(cfg.video === 'PAL' ? PAL : NTSC);
     const clock = this.clockHz;
     this.sid.model = cfg.sidModel;
@@ -230,6 +251,53 @@ export class C64 implements CpuBus, VicMemory {
     this.drive.enabled = cfg.driveEnabled && cfg.trueDrive && this.drive.hasRom;
   }
 
+  /** CPU speed and badline timing from the settings, as changed by the turbo registers */
+  private applySpeed(): void {
+    const cfg = this.config;
+    if (!this.regTurboOn) { this.turbo = 1; this.baStall = true; return; }
+    this.turbo = Math.max(1, this.regMhz > 0 ? this.regMhz : cfg.turbo);
+    const badlines = this.regBadlines ?? cfg.badlines;
+    this.baStall = this.turbo === 1 && this.regBadlines === null ? true : badlines;
+    if (this.turboSub >= this.turbo) this.turboSub = 0;
+  }
+
+  private clearTurboRegs(): void {
+    this.regMhz = -1; this.regBadlines = null; this.regTurboOn = true;
+    this.applySpeed();
+  }
+
+  /** Current CPU speed in MHz (the setting, or what a program set through $D030/$D031). */
+  get cpuMhz(): number { return this.turbo; }
+  /** Whether the CPU currently halts for badlines and sprite DMA. */
+  get badlineStalls(): boolean { return this.baStall; }
+
+  /** $D030/$D031 read, or -1 when the turbo control setting doesn't map that register. */
+  private readTurboReg(addr: number): number {
+    const mode = this.config.turboControl;
+    if (addr === 0xd031) {
+      if (mode === 'manual') return -1;
+      let idx = 0;
+      while (idx < 15 && TURBO_INDEX_MHZ[idx + 1] <= this.turbo) idx++;
+      return idx | (this.baStall ? 0 : 0x80);
+    }
+    if (mode !== 'enableBit') return -1;
+    return 0xfe | (this.turbo > 1 ? 1 : 0);
+  }
+
+  private writeTurboReg(addr: number, v: number): boolean {
+    const mode = this.config.turboControl;
+    if (addr === 0xd031) {
+      if (mode === 'manual') return false;
+      this.regMhz = TURBO_INDEX_MHZ[v & 15];
+      this.regBadlines = !(v & 0x80);
+    } else {
+      if (mode !== 'enableBit') return false;
+      this.regTurboOn = !!(v & 1);
+    }
+    this.applySpeed();
+    return true;
+  }
+
   get clockHz(): number { return this.config.video === 'PAL' ? 985248 : 1022727; }
   get fps(): number { return this.clockHz / (this.vic.model.cyclesPerLine * this.vic.model.lines); }
 
@@ -249,6 +317,7 @@ export class C64 implements CpuBus, VicMemory {
     this.reu?.reset();
     this.cart?.reset();
     this.uci.reset();
+    this.clearTurboRegs();
     this.cpu.irqLines = 0; this.cpu.nmiLines = 0; this.linesChanged = true;
     this.keyboard.clear();
     this.typeQueue = [];
@@ -333,7 +402,8 @@ export class C64 implements CpuBus, VicMemory {
   }
 
   read(addr: number): number {
-    if (this.turbo === 1) while (this.vic.ba) this.cycle();
+    // a read waits while BA is low; in turbo the rest of the phi2 cycle is lost too
+    if (this.baStall) while (this.vic.ba) { this.turboSub = this.turbo - 1; this.cycle(); }
     this.cycle();
     if (this.memHooks) {
       if (this.watchActive) this.checkWatch(addr, false, 0);
@@ -401,7 +471,10 @@ export class C64 implements CpuBus, VicMemory {
 
   private readIO(addr: number): number {
     const page = addr >> 8;
-    if (page <= 0xd3) return this.vic.read(addr);
+    if (page <= 0xd3) {
+      if (addr === 0xd030 || addr === 0xd031) { const t = this.readTurboReg(addr); if (t >= 0) return t; }
+      return this.vic.read(addr);
+    }
     if (page <= 0xd7) {
       this.syncSid();
       if (this.isSid2(addr)) return this.sid2!.read(addr);
@@ -428,7 +501,11 @@ export class C64 implements CpuBus, VicMemory {
 
   private writeIO(addr: number, v: number): void {
     const page = addr >> 8;
-    if (page <= 0xd3) { this.vic.write(addr, v); return; }
+    if (page <= 0xd3) {
+      if ((addr === 0xd030 || addr === 0xd031) && this.writeTurboReg(addr, v)) return;
+      this.vic.write(addr, v);
+      return;
+    }
     if (page <= 0xd7) {
       this.syncSid();
       if (this.isSid2(addr)) this.sid2!.write(addr, v); else this.sid.write(addr, v);
@@ -468,7 +545,10 @@ export class C64 implements CpuBus, VicMemory {
     const seg = this.readMap[addr >> 12];
     if (seg === M_IO) {
       const page = addr >> 8;
-      if (page <= 0xd3) return this.vic.peek(addr);
+      if (page <= 0xd3) {
+        if (addr === 0xd030 || addr === 0xd031) { const t = this.readTurboReg(addr); if (t >= 0) return t; }
+        return this.vic.peek(addr);
+      }
       if (page <= 0xd7) return (this.isSid2(addr) ? this.sid2! : this.sid).regs[addr & 0x1f];
       if (page <= 0xdb) return this.colorRam[addr & 0x3ff] & 0x0f;
       if (page === 0xdc) return this.cia1.peek(addr);
@@ -985,6 +1065,7 @@ export class C64 implements CpuBus, VicMemory {
       cart: this.cart ? { bank: this.cart.bank, exrom: this.cart.exrom, game: this.cart.game, ram: this.cart.ram.slice() } : null,
       tape: this.tape.saveState(),
       iec: { ...this.iec },
+      turboRegs: { mhz: this.regMhz, badlines: this.regBadlines, on: this.regTurboOn },
     };
   }
 
@@ -1004,6 +1085,9 @@ export class C64 implements CpuBus, VicMemory {
     if (s.cart && this.cart) { this.cart.bank = s.cart.bank; this.cart.exrom = s.cart.exrom; this.cart.game = s.cart.game; this.cart.ram.set(s.cart.ram); }
     this.tape.loadState(s.tape);
     Object.assign(this.iec, s.iec);
+    const t = s.turboRegs ?? { mhz: -1, badlines: null, on: true };
+    this.regMhz = t.mhz; this.regBadlines = t.badlines; this.regTurboOn = t.on;
+    this.applySpeed();
     this.updateMap();
   }
 }

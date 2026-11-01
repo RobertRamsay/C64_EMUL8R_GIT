@@ -2,6 +2,7 @@
 
 import type { C64Key } from '../core/keyboard';
 import type { SidModel } from '../core/sid';
+import type { TurboControl } from '../core/c64';
 import type { HostApi } from '../main/preload';
 import type { BlendMode } from './video';
 
@@ -32,6 +33,10 @@ export interface Settings {
     sid2Model: SidModel;
     reuSize: number;
     turbo: number;
+    /** turbo: the CPU halts for badlines and sprite DMA */
+    badlines: boolean;
+    /** how programs can change the turbo through $D030/$D031 */
+    turboControl: TurboControl;
     trueDrive: boolean;
     /** warp automatically while the 1541 or datasette motor runs */
     autoWarp: boolean;
@@ -52,7 +57,7 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  machine: { video: 'PAL', sidModel: '6581', sid2Address: 0, sid2Model: '8580', reuSize: 0, turbo: 1, trueDrive: true, autoWarp: true, uci: true },
+  machine: { video: 'PAL', sidModel: '6581', sid2Address: 0, sid2Model: '8580', reuSize: 0, turbo: 1, badlines: false, turboControl: 'manual', trueDrive: true, autoWarp: true, uci: true },
   romDir: '',
   video: { palette: 'Colodore', scale: 0, scanlines: 25, border: 'normal', smoothing: false, blend: 'none' },
   audio: { volume: 70, enabled: true, latencyMs: 60, sidQuality: 'resample' },
