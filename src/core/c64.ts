@@ -782,13 +782,25 @@ export class C64 implements CpuBus, VicMemory {
   runCycles(maxCycles: number): StopReason | null {
     this.stop = null;
     const end = this.cycles + maxCycles;
-    const startFrame = this.vic.frame;
+    this.vic.frameReady = false; // a frame finished by runFrame has had its endOfFrame
     while (this.cycles < end) {
       this.execOne();
-      if (this.vic.frame !== startFrame) { this.endOfFrame(); this.vic.frameReady = false; }
+      if (this.vic.frameReady) { this.vic.frameReady = false; this.endOfFrame(); }
       if (this.stop) return this.stop;
     }
     return null;
+  }
+
+  /**
+   * phi2 cycles until the beam is next at `line`/`cycle` (cycle 1-based, as
+   * vic.cycle); a whole frame when it is there now. runCycles() with this runs
+   * to the first instruction boundary at or after that point.
+   */
+  cyclesToBeam(line: number, cycle: number): number {
+    const m = this.vic.model, cpl = m.cyclesPerLine, total = cpl * m.lines;
+    const now = this.vic.raster * cpl + this.vic.cycle - 1;
+    const d = (line * cpl + cycle - 1 - now + total) % total;
+    return d === 0 ? total : d;
   }
 
   stepInstruction(): StopReason | null {

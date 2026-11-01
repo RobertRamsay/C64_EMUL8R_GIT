@@ -44,6 +44,12 @@ export class App {
   private rewind: any[] = [];
   private rewindEvery = 25;
   private quickSnap: any = null;
+  /** beam scrub: a crosshair follows the mouse, left click runs to it, right click goes back a frame */
+  beamScrub = false;
+  /** while the debugger is open: machine state and picture at the start of each frame and before each scrub */
+  private beamHist: { state: any; fb: Uint8Array; joy1: number; joy2: number }[] = [];
+  private beamMouse: { x: number; y: number } | null = null;
+  private beamReadout!: HTMLElement;
   private pauseBtn!: HTMLButtonElement;
   private warpBtn!: HTMLButtonElement;
   private dbgBtn!: HTMLButtonElement;
@@ -63,6 +69,7 @@ export class App {
     this.ultimate = new UltimateMenu(this);
     this.applySettings();
     this.bindEvents();
+    this.bindBeamScrub();
     await this.loadRoms();
     requestAnimationFrame(this.tick);
     if (this.settings.ui.binaryMonitor) void this.startBinaryMonitor();
@@ -558,6 +565,93 @@ export class App {
     this.resume();
   }
 
+  // -------------------------------------------------------- beam scrub
+  private recordBeamState(): void {
+    const c = this.c64;
+    this.beamHist.push({ state: c.saveState(), fb: c.vic.framebuffer.slice(), joy1: c.joy1, joy2: c.joy2 });
+    if (this.beamHist.length > 250) this.beamHist.shift(); // 5 s of PAL frames
+  }
+
+  setBeamScrub(on: boolean): void {
+    this.beamScrub = on;
+    if (on && this.running) this.pause();
+    this.debugger.scrubBtn?.classList.toggle('on', on);
+    document.getElementById('screen-wrap')!.classList.toggle('scrub', on);
+    if (!on) { this.beamMouse = null; this.updateBeamCursor(); }
+    else toast('Beam scrub: left click runs to the crosshair, right click goes back a frame', false, 2500);
+  }
+
+  /** Beam line and cycle at a framebuffer position (the inverse of showBeam's marker). */
+  private beamAt(p: { x: number; y: number }): { line: number; cycle: number } {
+    return { line: p.y + this.c64.vic.model.firstVisibleLine, cycle: Math.floor((p.x + 104) / 8) };
+  }
+
+  private updateBeamCursor(clientX = 0, clientY = 0): void {
+    const p = this.beamMouse, ro = this.beamReadout;
+    this.video.cursorX = p ? p.x : -1;
+    this.video.cursorY = p ? p.y : -1;
+    this.video.redraw();
+    if (!p) { ro.hidden = true; return; }
+    const v = this.c64.vic, r = v.regs, { line, cycle } = this.beamAt(p);
+    const tags: string[] = [];
+    if ((r[0x11] & 0x10) && line >= 0x30 && line <= 0xf7 && (line & 7) === (r[0x11] & 7)) tags.push('badline');
+    const top = r[0x11] & 8 ? 51 : 55, bottom = r[0x11] & 8 ? 251 : 247;
+    const left = r[0x16] & 8 ? 32 : 39, right = r[0x16] & 8 ? 352 : 343;
+    tags.push(line >= top && line < bottom && p.x >= left && p.x < right ? 'display' : 'border');
+    if (line === v.rasterCompare) tags.push('raster IRQ line');
+    ro.innerHTML = `line <b>${line}</b> ($${line.toString(16).toUpperCase().padStart(3, '0')}) · cycle <b>${cycle}</b> · x ${p.x}<br>${tags.join(' · ')}<br><span class="dim">beam now: line ${v.raster} cycle ${v.cycle} · LMB run here · RMB back a frame</span>`;
+    ro.hidden = false;
+    const wrap = document.getElementById('screen-wrap')!.getBoundingClientRect();
+    const mx = clientX - wrap.left, my = clientY - wrap.top;
+    ro.style.left = `${mx + 14 + ro.offsetWidth > wrap.width ? mx - 14 - ro.offsetWidth : mx + 14}px`;
+    ro.style.top = `${my + 14 + ro.offsetHeight > wrap.height ? my - 14 - ro.offsetHeight : my + 14}px`;
+  }
+
+  private scrubForward(): void {
+    if (!this.beamMouse) return;
+    if (this.running) this.pause();
+    const { line, cycle } = this.beamAt(this.beamMouse);
+    this.recordBeamState();
+    this.afterStep(this.c64.runCycles(this.c64.cyclesToBeam(line, cycle)));
+  }
+
+  /** Back to the crosshair's beam position at its previous pass, replayed from the newest earlier state. */
+  private scrubBack(): void {
+    if (!this.beamMouse) return;
+    if (this.running) this.pause();
+    const c = this.c64, m = c.vic.model, total = m.cyclesPerLine * m.lines;
+    const { line, cycle } = this.beamAt(this.beamMouse);
+    const target = c.cycles - (total - c.cyclesToBeam(line, cycle) || total);
+    let i = this.beamHist.length - 1;
+    while (i >= 0 && this.beamHist[i].state.cycles > target) i--;
+    if (i < 0) { toast('No earlier frames kept (the debugger keeps the last 5 seconds)', true, 2000); return; }
+    const h = this.beamHist[i];
+    this.beamHist.length = i + 1;
+    c.loadState(h.state);
+    c.vic.framebuffer.set(h.fb);
+    c.joy1 = h.joy1; c.joy2 = h.joy2;
+    this.afterStep(target > c.cycles ? c.runCycles(target - c.cycles) : null);
+  }
+
+  private bindBeamScrub(): void {
+    const wrap = document.getElementById('screen-wrap')!;
+    this.beamReadout = h('div', { id: 'beam-readout', hidden: '' });
+    wrap.append(this.beamReadout);
+    wrap.addEventListener('mousemove', (e) => {
+      if (!this.beamScrub) return;
+      this.beamMouse = this.video.fbPos(e.clientX, e.clientY);
+      this.updateBeamCursor(e.clientX, e.clientY);
+    });
+    wrap.addEventListener('mouseleave', () => { if (this.beamScrub) { this.beamMouse = null; this.updateBeamCursor(); } });
+    wrap.addEventListener('mousedown', (e) => {
+      if (!this.beamScrub) return;
+      e.preventDefault();
+      if (e.button === 0) this.scrubForward(); else if (e.button === 2) this.scrubBack();
+      this.updateBeamCursor(e.clientX, e.clientY);
+    });
+    wrap.addEventListener('contextmenu', (e) => { if (this.beamScrub) e.preventDefault(); });
+  }
+
   private showBeam(): void {
     const m = this.c64.vic.model;
     const line = this.c64.vic.raster - m.firstVisibleLine;
@@ -601,6 +695,7 @@ export class App {
   loadStateObj(s: any): void {
     if (s.media?.disk) { this.c64.insertDisk(s.media.disk, s.media.diskName || 'snapshot.d64'); }
     this.c64.loadState(s);
+    this.beamHist = [];
     this.mediaLabel = s.media?.label ?? this.mediaLabel;
     this.video.draw(this.c64.vic.framebuffer);
     this.debugger.refresh(true);
@@ -621,6 +716,7 @@ export class App {
     const s = this.rewind.pop();
     if (!s) { toast('Nothing to rewind', true, 1200); return; }
     this.c64.loadState(s);
+    this.beamHist = [];
     this.video.draw(this.c64.vic.framebuffer);
     if (!this.running) this.debugger.refresh(true);
   }
@@ -649,6 +745,7 @@ export class App {
   // ------------------------------------------------------------ frame loop
   private runOneFrame(withAudio: boolean): boolean {
     this.input.poll();
+    if (this.settings.ui.debugger) this.recordBeamState();
     const r = this.c64.runFrame();
     if (this.pendingFrameHook && this.pendingFrameHook()) this.pendingFrameHook = null;
     if (this.c64.frameCount % this.rewindEvery === 0) {

@@ -329,6 +329,24 @@ function check(name: string, ok: boolean, detail = ''): void {
   check('badline timing halts the CPU in turbo', on < off && off - on > 50, `passes with badlines ${on}, without ${off}`);
 }
 
+// 4i. beam scrubbing: run to a beam position, and a restored state replays exactly
+{
+  const c = machine(false);
+  runFrames(c, 150);
+  c.typeText('10 POKE 53280,PEEK(53266):GOTO 10\nRUN\n');
+  runFrames(c, 20);
+  c.runCycles(c.cyclesToBeam(100, 30));
+  const v = c.vic, landed = v.raster === 100 && v.cycle >= 30 && v.cycle < 38;
+  const s = c.saveState(), fb = v.framebuffer.slice();
+  const hash = () => { let h = 0; for (const x of v.framebuffer) h = (Math.imul(h, 31) + x) | 0; for (const x of c.ram) h = (Math.imul(h, 31) + x) | 0; return h; };
+  c.runCycles(c.cyclesToBeam(200, 40) + 2 * 63 * 312);
+  const h1 = hash(), pos1 = [v.raster, v.cycle, c.cycles];
+  c.loadState(s); v.framebuffer.set(fb);
+  c.runCycles(c.cyclesToBeam(200, 40) + 2 * 63 * 312);
+  const replay = hash() === h1 && v.raster === pos1[0] && v.cycle === pos1[1] && c.cycles === pos1[2];
+  check('beam scrub: run to beam position, exact replay from a state', landed && replay, JSON.stringify({ landed, at: [v.raster, v.cycle], replay }));
+}
+
 // 5. fast virtual drive: save + load + directory
 {
   const c = machine(false);

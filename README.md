@@ -83,6 +83,7 @@ Palettes (`.vpl`) found next to the VICE ROMs are added to the palette list.
 - CPU registers and flags, both editable
 - Disassembly that follows PC, with labels, breakpoint gutter, run-to-cursor and set-PC
 - Step into/over/out, run one raster line or one frame, and a raster beam marker on the screen
+- Beam scrub (crosshair button): a crosshair follows the mouse and shows the raster line, cycle and region under it. Left click runs to that beam position, right click goes back to it a frame earlier. The debugger keeps the last 5 seconds of frames, so stepping back is exact.
 - Breakpoints on exec, read, write or access ranges and on raster lines. They can take conditions (`A==$20 && RL>100`). The debugger can also break on IRQ or JAM.
 - Memory editor with views for each bank (CPU, RAM, ROM, VIC, 1541), highlighting changed bytes and reads/writes/execution
 - Live memory map heatmap, as in C64 Debugger

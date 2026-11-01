@@ -73,12 +73,25 @@ export class Video {
   /** draw a raster beam marker at this framebuffer line (debugger) */
   beamLine = -1;
   beamX = -1;
+  /** beam scrub crosshair at this framebuffer position (debugger; -1 = none) */
+  cursorX = -1;
+  cursorY = -1;
 
   constructor(public canvas: HTMLCanvasElement, private wrap: HTMLElement) {
     this.ctx = canvas.getContext('2d', { alpha: false })!;
   }
 
   setPalette(hex: string[]): void { this.palette = paletteToU32(hex); }
+
+  redraw(): void { if (this.lastFb) this.draw(this.lastFb); }
+
+  /** Framebuffer position under a point on screen, or null outside the picture. */
+  fbPos(clientX: number, clientY: number): { x: number; y: number } | null {
+    const r = this.canvas.getBoundingClientRect();
+    const u = (clientX - r.left) / r.width, v = (clientY - r.top) / r.height;
+    if (u < 0 || u >= 1 || v < 0 || v >= 1) return null;
+    return { x: this.crop.x + Math.floor(u * this.crop.w), y: this.crop.y + Math.floor(v * this.crop.h) };
+  }
 
   /** border: 'full' = everything rendered, 'normal' = 32px side / 35px top borders, 'none' = 320x200 */
   setGeometry(border: 'full' | 'normal' | 'none', visibleLines: number, firstLine: number): void {
@@ -142,6 +155,12 @@ export class Video {
           out[p] = col + x < this.beamX ? 0xff4040ff : (out[p] & 0xff7f7f7f) | 0xff303000;
         }
       }
+    }
+    if (this.cursorX >= 0) {
+      // dotted cyan crosshair
+      const cx = this.cursorX - x, cy = this.cursorY - y;
+      if (cx >= 0 && cx < w) for (let row = 0; row < h; row += 2) out[row * w + cx] = 0xffffff00;
+      if (cy >= 0 && cy < h) for (let col = 0; col < w; col += 2) out[cy * w + col] = 0xffffff00;
     }
     if (this.factor > 1) this.upscale();
     this.ctx.putImageData(this.img, 0, 0);

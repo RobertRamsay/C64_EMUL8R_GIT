@@ -34,6 +34,7 @@ export class DebuggerUI {
   private activeRight = 'vic';
   private activeBottom = 'monitor';
   private els: Record<string, HTMLElement> = {};
+  scrubBtn!: HTMLButtonElement;
 
   constructor(private app: App) {
     this.monitor = new Monitor(app.c64, {
@@ -113,6 +114,7 @@ export class DebuggerUI {
         btn('', { icon: 'stepout', cls: 'small icon', title: 'Step out (Shift+F11)', onClick: () => this.app.stepOut() }),
         btn('', { icon: 'line', cls: 'small icon', title: 'Run to next raster line', onClick: () => this.app.stepLine() }),
         btn('', { icon: 'frame', cls: 'small icon', title: 'Run one frame', onClick: () => this.app.stepFrame() }),
+        this.scrubBtn = btn('', { icon: 'target', cls: 'small icon', title: 'Beam scrub: a crosshair follows the mouse over the screen; left click runs to that beam position, right click goes back to it a frame earlier', onClick: () => this.app.setBeamScrub(!this.app.beamScrub) }),
         btn('1cy', { cls: 'small', title: 'Run one CPU cycle (to next instruction boundary)', onClick: () => this.app.stepCycles(1) })));
     const body = h('div', { class: 'panel-body' });
     this.els.regs = h('div', { class: 'regs' });
