@@ -64,6 +64,12 @@ export class App {
     try { rate = await this.audio.init(); } catch (e) { console.warn('audio init failed', e); }
     this.c64.applyConfig({ ...this.settings.machine, sampleRate: rate, driveEnabled: true });
     this.c64.onLog = (m) => this.debugger?.log(m);
+    // Ultimate runtime palette (command interface SET_PALETTE): overrides the
+    // palette from the settings until RESET_PALETTE.
+    this.c64.uci.basePalette = () => this.settingsPaletteHex().flatMap((h) => {
+      const v = parseInt(h, 16); return [(v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff];
+    });
+    this.c64.uci.onPalette = () => this.applyVideoSettings();
     this.buildToolbar();
     this.debugger = new DebuggerUI(this);
     this.ultimate = new UltimateMenu(this);
@@ -134,9 +140,25 @@ export class App {
     this.updateStatus();
   }
 
+  /** The palette chosen in the settings, as 16 RRGGBB strings. */
+  settingsPaletteHex(): string[] {
+    return this.palettes[this.settings.video.palette] ?? PALETTES.Colodore;
+  }
+
+  /** The palette on screen: a program's runtime one (Ultimate SET_PALETTE) or the settings one. */
+  screenPaletteHex(): string[] {
+    const rt = this.c64.uci.palette;
+    if (!rt) return this.settingsPaletteHex();
+    const hex: string[] = [];
+    for (let i = 0; i < 16; i++) {
+      hex.push(((rt[i * 3] << 16) | (rt[i * 3 + 1] << 8) | rt[i * 3 + 2]).toString(16).padStart(6, '0'));
+    }
+    return hex;
+  }
+
   applyVideoSettings(): void {
     const s = this.settings.video;
-    this.video.setPalette(this.palettes[s.palette] ?? PALETTES.Colodore);
+    this.video.setPalette(this.screenPaletteHex());
     this.video.scale = s.scale;
     this.video.blend = s.blend;
     const m = this.c64.vic.model;
@@ -469,7 +491,7 @@ export class App {
           return true;
         } catch { return false; }
       },
-      palette: () => (this.palettes[this.settings.video.palette] ?? PALETTES.Colodore)
+      palette: () => this.screenPaletteHex()
         .map((hx) => [parseInt(hx.slice(0, 2), 16), parseInt(hx.slice(2, 4), 16), parseInt(hx.slice(4, 6), 16)]),
       log: (m) => this.debugger.log(m),
     }, (conn, data) => {
