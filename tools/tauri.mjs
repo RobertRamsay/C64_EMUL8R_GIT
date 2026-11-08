@@ -10,7 +10,9 @@ import { join } from 'node:path';
 
 const env = { ...process.env };
 const cargoBin = join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.cargo', 'bin');
-if (existsSync(cargoBin)) env.PATH = `${cargoBin}${process.platform === 'win32' ? ';' : ':'}${env.PATH}`;
+// Windows spells it Path, and a copied env object is case-sensitive
+const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
+if (existsSync(cargoBin)) env[pathKey] = `${cargoBin}${process.platform === 'win32' ? ';' : ':'}${env[pathKey] ?? ''}`;
 
 const newest = (dir) => (existsSync(dir) ? readdirSync(dir).filter((d) => /^\d/.test(d)).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).pop() : undefined);
 
