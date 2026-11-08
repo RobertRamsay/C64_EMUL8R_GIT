@@ -182,9 +182,9 @@ export class App {
       menuItem('Attach without starting…', () => this.openDialog(false), '', 'open'),
       menuItem('Ultimate file browser', () => this.ultimate.open(), 'Ctrl+U', 'ultimate'),
       h('hr'),
-      menuItem('Eject disk', () => { this.c64.ejectDisk(); this.updateStatus(); }, '', 'eject'),
+      menuItem('Eject disk', () => void this.ejectDisk(), '', 'eject'),
       menuItem('Save disk image as…', () => this.saveDisk(), '', 'save'),
-      menuItem('Insert new blank disk', () => { this.c64.insertDisk(D64.blank().data, 'blank.d64'); this.mediaLabel = 'Disk blank.d64'; this.updateStatus(); toast('Blank disk inserted'); }, '', 'disk'),
+      menuItem('Insert new blank disk', () => { void this.flushDisk(); this.c64.insertDisk(D64.blank().data, 'blank.d64'); this.setDiskSource('blank.d64'); this.mediaLabel = 'Disk blank.d64'; this.updateStatus(); toast('Blank disk inserted'); }, '', 'disk'),
       h('hr'),
       menuItem(this.c64.tape.playing ? 'Stop tape' : 'Press PLAY on tape', () => { if (this.c64.tape.playing) this.c64.tape.stop(); else this.c64.tape.play(); this.updateStatus(); }, '', 'tape'),
       menuItem('Rewind tape', () => this.c64.tape.rewind(), '', 'rewind'),
@@ -359,7 +359,11 @@ export class App {
       // autostarting other media removes a cartridge that would take over on reset
       if (autostart && kind !== 'crt' && kind !== 'bin' && this.c64.cart) this.c64.attachCartridge(null);
       this.sidInfo = null;
+      const isDisk = kind === 'd64' || kind === 'g64';
+      // save the outgoing disk's changes before it is replaced
+      if (isDisk) void this.flushDisk();
       const desc = attachMedia(this.c64, name, data, autostart);
+      if (isDisk) this.setDiskSource(name, path);
       this.mediaLabel = desc;
       this.running = true;
       this.updatePauseUi();
@@ -422,8 +426,64 @@ export class App {
     const img = this.c64.currentDiskImage();
     if (!img) { toast('No disk inserted', true); return; }
     const name = this.c64.vdiskName || 'disk.d64';
-    const p = await window.host.saveFile(name.replace(/\.g64$/i, '.d64'), img, [{ name: 'D64 disk image', extensions: ['d64'] }]);
-    if (p) toast('Disk saved to ' + p);
+    try {
+      const p = await window.host.saveFile(name.replace(/\.g64$/i, '.d64'), img, [{ name: 'D64 disk image', extensions: ['d64'] }]);
+      if (p) {
+        this.clearDiskChanged();
+        this.diskPath = p;
+        toast('Disk saved to ' + p);
+      }
+    } catch (e) { toast('Could not save the disk: ' + (e as Error).message, true, 5000); }
+  }
+
+  // -------------------------------------------------------- disk write-back
+  // A disk attached from a .d64 file is written back to it after every change,
+  // as VICE does, so a SAVE shows up in the file. A disk with no .d64 behind it
+  // (blank, G64, demo, snapshot) stays in memory until "Save disk image as…".
+  private diskPath: string | null = null;
+  private diskHintShown = false;
+
+  private diskChanged(): boolean {
+    return this.c64.vdiskDirty || !!(this.c64.drive.enabled && this.c64.drive.disk?.dirty);
+  }
+
+  private clearDiskChanged(): void {
+    this.c64.vdiskDirty = false;
+    if (this.c64.drive.disk) this.c64.drive.disk.dirty = false;
+  }
+
+  /** Called every frame: write a changed disk back once the drive has stopped. */
+  private checkDiskWriteBack(): void {
+    if (!this.diskChanged() || (this.c64.drive.enabled && this.c64.drive.motor)) return;
+    void this.flushDisk();
+  }
+
+  /** Writes a changed disk back to its .d64 file now. */
+  async flushDisk(): Promise<void> {
+    if (!this.diskChanged()) return;
+    const img = this.c64.currentDiskImage();
+    this.clearDiskChanged();
+    if (!img) return;
+    if (!this.diskPath) {
+      if (!this.diskHintShown) toast('This disk is only in memory: use "Save disk image as…" to keep it', false, 5000);
+      this.diskHintShown = true;
+      return;
+    }
+    try { await window.host.writeFile(this.diskPath, img); }
+    catch (e) { toast('Could not write ' + this.diskPath + ': ' + (e as Error).message, true, 6000); }
+  }
+
+  /** A new disk went in: remember the .d64 it came from, if any. */
+  private setDiskSource(name: string, path?: string): void {
+    this.diskPath = path && /\.d64$/i.test(name) ? path : null;
+    this.diskHintShown = false;
+  }
+
+  async ejectDisk(): Promise<void> {
+    await this.flushDisk();
+    this.c64.ejectDisk();
+    this.setDiskSource('');
+    this.updateStatus();
   }
 
   async pasteText(): Promise<void> {
@@ -715,7 +775,8 @@ export class App {
     return s;
   }
   loadStateObj(s: any): void {
-    if (s.media?.disk) { this.c64.insertDisk(s.media.disk, s.media.diskName || 'snapshot.d64'); }
+    // a snapshot's disk is a copy from back then: keep it in memory, never over the .d64
+    if (s.media?.disk) { void this.flushDisk(); this.c64.insertDisk(s.media.disk, s.media.diskName || 'snapshot.d64'); this.setDiskSource(''); }
     this.c64.loadState(s);
     this.beamHist = [];
     this.mediaLabel = s.media?.label ?? this.mediaLabel;
@@ -770,6 +831,7 @@ export class App {
     if (this.settings.ui.debugger) this.recordBeamState();
     const r = this.c64.runFrame();
     if (this.pendingFrameHook && this.pendingFrameHook()) this.pendingFrameHook = null;
+    this.checkDiskWriteBack();
     if (this.c64.frameCount % this.rewindEvery === 0) {
       this.rewind.push(this.c64.saveState());
       if (this.rewind.length > 120) this.rewind.shift();
