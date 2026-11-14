@@ -103,6 +103,7 @@ export class DebuggerUI {
   }
 
   refresh(full: boolean): void {
+    if (full) { this.paintSidRecord(); this.recTick(); }
     if (!this.app.settings.ui.debugger) return;
     this.updateCpu();
     this.updateDisasm();
@@ -686,8 +687,9 @@ export class DebuggerUI {
     this.els.sid = h('div', { class: 'panel-body' });
     this.els.sidRecBtn = btn('', { cls: 'small', onClick: () => void this.toggleSidRecord() });
     this.els.sidRecInfo = h('span', { class: 'hint mono' });
+    this.els.wavBtn = btn('', { cls: 'small', onClick: () => void this.app.toggleWav() });
     el.append(h('div', { class: 'panel-head' }, h('h3', {}, 'SID'), h('span', { class: 'hint' }, 'tick to mute a voice'),
-      h('span', { class: 'tb-spacer' }), this.els.sidRecInfo, this.els.sidRecBtn), this.els.sid);
+      h('span', { class: 'tb-spacer' }), this.els.sidRecInfo, this.els.wavBtn, this.els.sidRecBtn), this.els.sid);
     this.sidBuilt = false;
     this.paintSidRecord();
   }
@@ -696,20 +698,28 @@ export class DebuggerUI {
   private sidRec: SidRecorder | null = null;
   private sidRecTimer = 0;
   private paintSidRecord(): void {
-    const b = this.els.sidRecBtn, info = this.els.sidRecInfo;
+    const b = this.els.sidRecBtn, info = this.els.sidRecInfo, wb = this.els.wavBtn;
     if (!b) return;
-    const r = this.sidRec;
+    const r = this.sidRec, w = this.app.wavRec;
+    wb.textContent = w ? '■ Stop & save .wav' : '● Record WAV';
+    wb.title = w ? 'Stop recording and save the audio as a .wav file' : 'Record the audio output (what you hear, filters and mutes included) to a 16-bit stereo .wav';
+    wb.classList.toggle('rec', !!w);
     b.textContent = r ? '■ Stop & save .sid' : '● Export SID…';
     b.title = r ? 'Stop recording and save the tune as a .sid file'
       : 'Record the music that is playing now (start at the beginning of the tune, stop when it loops) and save it as a .sid that plays in VICE, sidplay and C64EMUL8R';
     b.classList.toggle('rec', !!r);
-    info.textContent = r ? `recording ${r.seconds.toFixed(1)} s · ${r.writes.length} writes` : '';
+    info.textContent = [r ? `SID ${r.seconds.toFixed(1)} s · ${r.writes.length} writes` : '', w ? `WAV ${w.seconds.toFixed(1)} s` : ''].filter(Boolean).join(' · ');
+  }
+  /** keeps the recording counters moving while either recorder runs */
+  private recTick(): void {
+    clearInterval(this.sidRecTimer);
+    if (this.sidRec || this.app.wavRec) this.sidRecTimer = window.setInterval(() => { this.paintSidRecord(); if (!this.sidRec && !this.app.wavRec) clearInterval(this.sidRecTimer); }, 250);
   }
   private async toggleSidRecord(): Promise<void> {
     const app = this.app, c = app.c64;
     if (!this.sidRec) {
       this.sidRec = new SidRecorder(c);
-      this.sidRecTimer = window.setInterval(() => this.paintSidRecord(), 250);
+      this.recTick();
       if (!app.running) toast('Recording SID writes - resume the machine to record the music');
       this.paintSidRecord();
       return;
@@ -717,7 +727,6 @@ export class DebuggerUI {
     const rec = this.sidRec;
     rec.stop();
     this.sidRec = null;
-    clearInterval(this.sidRecTimer);
     this.paintSidRecord();
     try {
       const m = c.vic.model, frame = m.cyclesPerLine * m.lines;

@@ -9,6 +9,7 @@ import { D64 } from '../src/core/d64';
 import { attachMedia, parseSid, startSid } from '../src/core/loaders';
 import { BinaryMonitor } from '../src/core/binmon';
 import { SidRecorder, buildPsid, toTicks } from '../src/core/sidrecord';
+import { WavRecorder } from '../src/core/wav';
 import { decodeSprite, encodeSprite, getPixel, readSpd, readSpriteFile, setPixel, spritesToAsm, transformSprite, writeSpd } from '../src/core/sprites';
 
 const candidates = [
@@ -467,6 +468,31 @@ if (roms.dos1541) {
     const want = sa.slice(skip, skip + 100).join('|');
     check(`export SID replays the same register states (${cia ? '2x' : '1x'})`, sb.join('|').includes(want), `a ${sa.length} ticks, b ${sb.length}; ${sa[1]} / ${sb[1]}`);
   }
+}
+
+
+// ---- WAV export: header, samples, silence trimmed, real SID audio
+{
+  const w = new WavRecorder(44100);
+  w.add(new Float32Array(100), new Float32Array(100));                 // leading silence
+  w.add(Float32Array.from([0.5, -0.5, 1.2]), Float32Array.from([0.25, 0, -2]));
+  w.add(new Float32Array(50), new Float32Array(50));                    // trailing silence
+  const d = w.encode();
+  const dv = new DataView(d.buffer);
+  const txt = (o: number) => String.fromCharCode(...d.subarray(o, o + 4));
+  check('WAV header', txt(0) === 'RIFF' && txt(8) === 'WAVE' && txt(36) === 'data' && dv.getUint16(22, true) === 2 && dv.getUint32(24, true) === 44100 && dv.getUint16(34, true) === 16 && dv.getUint32(4, true) === d.length - 8);
+  const smp = Array.from({ length: (d.length - 44) / 2 }, (_v, i) => dv.getInt16(44 + i * 2, true));
+  check('WAV samples interleaved, clipped, silence trimmed', smp.join(',') === '16384,8192,-16383,0,32767,-32767', smp.join(','));
+  // real audio: a machine playing the synthetic tune produces a non-silent recording
+  const c = machine(false);
+  runFrames(c, 100);
+  c.poke(0xd418, 15); c.poke(0xd405, 0x09); c.poke(0xd406, 0xf0); c.poke(0xd401, 0x20); c.poke(0xd404, 0x21);
+  c.takeAudio();
+  const rec = new WavRecorder(c.config.sampleRate);
+  for (let i = 0; i < 25; i++) { runFrames(c, 1); const a = c.takeAudio(); rec.add(a.left, a.right); }
+  const wav = rec.encode(false), wv = new DataView(wav.buffer);
+  let peak = 0; for (let o = 44; o < wav.length; o += 2) peak = Math.max(peak, Math.abs(wv.getInt16(o, true)));
+  check('WAV records SID output', Math.abs(rec.seconds - 0.5) < 0.02 && peak > 1000, `${rec.seconds.toFixed(3)} s, peak ${peak}`);
 }
 
 // ---- sprite editor helpers (pure)
