@@ -14,7 +14,7 @@ import { AudioOut } from './audio';
 import { Video } from './video';
 import { InputManager, DEVICE_NAMES } from './input';
 import { Settings, loadSettings, saveSettings, TURBO_SPEEDS } from './settings';
-import { btn, dropdown, h, menuItem, toast, clear, hex4 } from './ui/dom';
+import { btn, dropdown, h, icon, menuItem, toast, clear, hex4 } from './ui/dom';
 import { openSettings } from './ui/settingsDialog';
 import { DebuggerUI } from './ui/debugger';
 import { UltimateMenu } from './ui/ultimate';
@@ -53,6 +53,7 @@ export class App {
   private beamReadout!: HTMLElement;
   private pauseBtn!: HTMLButtonElement;
   private warpBtn!: HTMLButtonElement;
+  private sprBtn!: HTMLButtonElement;
   private dbgBtn!: HTMLButtonElement;
   private speedBtn!: HTMLButtonElement;
   /** the file last autostarted: REBOOT loads it again */
@@ -229,8 +230,11 @@ export class App {
       menuItem('More turbo settings\u2026', () => openSettings(this), '', 'settings'),
     ]);
     main.append(btn('', { icon: 'rewind', title: 'Rewind ~0.5 s (Ctrl+Z, hold to keep rewinding)', onClick: () => this.doRewind() }));
-    const snap = btn('', { icon: 'camera', title: 'Snapshots' });
+    const snap = btn('', { icon: 'camera', title: 'Snapshots and screenshots' });
     main.append(snap);
+    this.sprBtn = btn('', { icon: 'sprite', onClick: () => this.setSpritesVisible(!this.c64.vic.showSprites) });
+    main.append(this.sprBtn);
+    this.paintSpriteBtn();
     dropdown(snap, () => [
       menuItem('Quick save state', () => this.quickSave(), 'Ctrl+S', 'save'),
       menuItem('Quick load state', () => void this.quickLoad(), 'Ctrl+L', 'load'),
@@ -239,6 +243,7 @@ export class App {
       menuItem('Load snapshot file…', () => this.openDialog(false, [{ name: 'Snapshot', extensions: ['c64s'] }]), '', 'load'),
       h('hr'),
       menuItem('Save screenshot (PNG)…', () => this.screenshot(), '', 'camera'),
+      menuItem(this.c64.vic.showSprites ? 'Hide sprites (background only)' : 'Show sprites', () => this.setSpritesVisible(!this.c64.vic.showSprites), '', this.c64.vic.showSprites ? 'spriteoff' : 'sprite'),
     ]);
     main.append(btn('', { icon: 'paste', title: 'Type text from clipboard (Ctrl+Shift+V)', onClick: () => this.pasteText() }));
     main.append(h('span', { class: 'tb-sep' }));
@@ -879,6 +884,22 @@ export class App {
     this.beamHist = [];
     this.video.draw(this.c64.vic.framebuffer);
     if (!this.running) this.debugger.refresh(true);
+  }
+
+  /** Draw or hide sprites on screen (display only: collisions and IRQs still happen). */
+  setSpritesVisible(on: boolean): void {
+    this.c64.vic.showSprites = on;
+    this.paintSpriteBtn();
+    document.querySelectorAll<HTMLInputElement>('input[data-vis="sprites"]').forEach((i) => (i.checked = on));
+    toast(on ? 'Sprites shown' : this.running ? 'Sprites hidden: the screen shows only the background'
+      : 'Sprites hidden from the next frame: resume (or step a frame) to update the screen', false, 2200);
+  }
+  private paintSpriteBtn(): void {
+    const on = this.c64.vic.showSprites, b = this.sprBtn;
+    if (!b) return;
+    b.classList.toggle('on', !on);
+    b.title = on ? 'Hide sprites, to see or screenshot just the background' : 'Sprites are hidden: click to show them again';
+    b.querySelector('svg')?.replaceWith(icon(on ? 'sprite' : 'spriteoff'));
   }
 
   async screenshot(): Promise<void> {

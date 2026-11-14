@@ -458,7 +458,7 @@ export class DebuggerUI {
   // ----------------------------------------------------------------- VIC
   private renderVic(el: HTMLElement): void {
     this.els.vic = h('div', { class: 'panel-body' });
-    const showSpr = h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: this.app.c64.vic.showSprites, onChange: (e: Event) => (this.app.c64.vic.showSprites = (e.target as HTMLInputElement).checked) }), 'sprites');
+    const showSpr = h('label', { class: 'chk' }, h('input', { type: 'checkbox', 'data-vis': 'sprites', checked: this.app.c64.vic.showSprites, onChange: (e: Event) => this.app.setSpritesVisible((e.target as HTMLInputElement).checked) }), 'sprites');
     const showBg = h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: this.app.c64.vic.showBackground, onChange: (e: Event) => (this.app.c64.vic.showBackground = (e.target as HTMLInputElement).checked) }), 'graphics');
     const rl = h('input', { class: 'inp hex', placeholder: 'line' }) as HTMLInputElement;
     rl.addEventListener('keydown', (e) => {
