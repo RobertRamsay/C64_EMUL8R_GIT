@@ -8,6 +8,8 @@ import { disassemble, findPrevInstr, hex2, hex4, opLength } from '../../core/dis
 import { Monitor, historyLines, petsciiChar } from '../../core/monitor';
 import { C64_COLOR_NAMES } from '../../core/palettes';
 import { btn, clear, h, toast } from './dom';
+import { SpriteEditor, colourPicker, exportMenu, importSprites, vicColours } from './spriteEditor';
+import type { SpriteColours } from '../../core/sprites';
 
 type Tab = { id: string; label: string; render: (el: HTMLElement) => void; update: (full: boolean) => void };
 
@@ -24,6 +26,9 @@ export class DebuggerUI {
   private gfxMode = 'charset-vic';
   private gfxAddr = 0x2000;
   private gfxMc = false;
+  /** sprite sheet preview colours; null = from the VIC registers */
+  private sheetCols: Record<keyof SpriteColours, number | null> = { bg: null, mc1: null, spr: null, mc2: null };
+  private sheetCount = 64;
   private monOut!: HTMLElement;
   private monHistory: string[] = [];
   private monHistPos = 0;
@@ -497,9 +502,24 @@ export class DebuggerUI {
   private renderSprites(el: HTMLElement): void {
     this.els.sprites = h('div', { class: 'sprites' });
     for (let i = 0; i < 8; i++) {
-      this.els.sprites.append(h('div', { class: 'sprite-cell' }, h('canvas', { width: 24, height: 21, class: 'pix' }), h('div', { class: 'si' })));
+      const cell = h('div', { class: 'sprite-cell edit', title: `Edit sprite #${i}` }, h('canvas', { width: 24, height: 21, class: 'pix' }), h('div', { class: 'si' }));
+      cell.addEventListener('click', () => this.editLiveSprite(i));
+      this.els.sprites.append(cell);
     }
-    el.append(h('div', { class: 'panel-head' }, h('h3', {}, 'Sprites'), h('span', { class: 'hint' }, 'live from VIC bank + pointers')), h('div', { class: 'panel-body' }, this.els.sprites));
+    el.append(h('div', { class: 'panel-head' }, h('h3', {}, 'Sprites'), h('span', { class: 'hint' }, 'live from VIC bank + pointers · click one to edit')), h('div', { class: 'panel-body' }, this.els.sprites));
+  }
+
+  private editLiveSprite(i: number): void {
+    const c = this.app.c64, r = c.vic.regs;
+    const bank = (3 - (c.cia2.portAOut() & 3)) << 14;
+    const ptr = c.vicRead(c.vic.screenAddr() + 0x3f8 + i);
+    SpriteEditor.open(this.app, { addr: bank + (ptr << 6), mc: !!(r[0x1c] & (1 << i)), cols: vicColours(this.app, i), live: i });
+  }
+
+  /** Sheet colours with VIC fallbacks filled in. */
+  private sheetColours(): SpriteColours {
+    const v = vicColours(this.app, 0), k = this.sheetCols;
+    return { bg: k.bg ?? v.bg, mc1: k.mc1 ?? v.mc1, spr: k.spr ?? v.spr, mc2: k.mc2 ?? v.mc2 };
   }
 
   private updateSprites(): void {
@@ -544,7 +564,33 @@ export class DebuggerUI {
     const mc = h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: this.gfxMc, onChange: (e: Event) => { this.gfxMc = (e.target as HTMLInputElement).checked; this.updateGfx(); } }), 'multicolor');
     const step = (d: number) => btn(d > 0 ? '+' : '−', { cls: 'small', onClick: () => { const s = this.gfxMode === 'sprites' ? 0x40 * 16 : this.gfxMode === 'bitmap' ? 0x2000 : 0x800; this.gfxAddr = (this.gfxAddr + d * s) & 0xffff; addr.value = hex4(this.gfxAddr); this.updateGfx(); } });
     this.els.gfx = h('canvas', { class: 'pix', width: 320, height: 200, style: 'width:100%;max-width:640px' });
-    el.append(h('div', { class: 'panel-head' }, h('h3', {}, 'Graphics'), mode, addr, step(-1), step(1), mc), h('div', { class: 'panel-body' }, this.els.gfx));
+    // sprite sheet: preview colours, export/import, click a sprite to edit it
+    const vic = () => vicColours(this.app, 0);
+    const pick = (k: keyof SpriteColours, label: string) => h('span', { class: 'cp-lab' }, label,
+      colourPicker(this.app, label, () => this.sheetCols[k], (v) => { this.sheetCols[k] = v; this.updateGfx(); }, () => vic()[k]));
+    const count = h('input', { class: 'inp', type: 'number', min: '1', max: '256', value: String(this.sheetCount), style: 'width:52px', title: 'How many sprites to export, from the address' }) as HTMLInputElement;
+    count.addEventListener('keydown', (e) => e.stopPropagation());
+    count.addEventListener('change', () => { this.sheetCount = Math.max(1, Math.min(256, parseInt(count.value) || 64)); count.value = String(this.sheetCount); });
+    const sheetInfo = () => ({ addr: this.gfxAddr, count: this.sheetCount, mc: this.gfxMc, cols: this.sheetColours() });
+    this.els.gfxSpr = h('div', { class: 'panel-head sub' }, pick('bg', 'BG'), pick('mc1', 'MC1'), pick('spr', 'Sprite'), pick('mc2', 'MC2'),
+      h('span', { class: 'tb-spacer' }), count, exportMenu(this.app, sheetInfo, true),
+      btn('Import', { cls: 'small', icon: 'load', title: 'Load sprites (.spd, .bin, .prg, .png) into RAM at this address', onClick: async () => {
+        const r = await importSprites(this.app, this.gfxAddr, this.gfxMc, this.sheetColours());
+        if (r?.spdCols) {
+          this.sheetCols = { ...r.spdCols }; this.gfxMc = !!r.spdMc;
+          (mc.querySelector('input') as HTMLInputElement).checked = this.gfxMc;
+          this.els.gfxSpr.querySelectorAll<any>('.cpick').forEach((b) => b.repaint());
+        }
+        this.updateGfx();
+      } }));
+    this.els.gfx.addEventListener('click', (e) => {
+      if (this.gfxMode !== 'sprites') return;
+      const r = this.els.gfx.getBoundingClientRect();
+      const sx = Math.floor(((e.clientX - r.left) / r.width) * 8), sy = Math.floor(((e.clientY - r.top) / r.height) * 8);
+      if (sx < 0 || sy < 0 || sx > 7 || sy > 7) return;
+      SpriteEditor.open(this.app, { addr: (this.gfxAddr + (sy * 8 + sx) * 64) & 0xffff, mc: this.gfxMc, cols: this.sheetColours() });
+    });
+    el.append(h('div', { class: 'panel-head' }, h('h3', {}, 'Graphics'), mode, addr, step(-1), step(1), mc), this.els.gfxSpr, h('div', { class: 'panel-body' }, this.els.gfx));
   }
 
   private updateGfx(): void {
@@ -563,6 +609,9 @@ export class DebuggerUI {
     if (mode === 'screen' || mode === 'bitmap' || mode === 'bitmap-vic') { w = 320; hgt = 200; }
     else if (mode === 'sprites') { w = 24 * 8; hgt = 21 * 8; }
     if (cv.width !== w || cv.height !== hgt) { cv.width = w; cv.height = hgt; }
+    this.els.gfxSpr.style.display = mode === 'sprites' ? '' : 'none';
+    cv.style.cursor = mode === 'sprites' ? 'crosshair' : '';
+    cv.title = mode === 'sprites' ? 'Click a sprite to edit it' : '';
     const ctx = cv.getContext('2d')!;
     const img = ctx.createImageData(w, hgt);
     const d = new Uint32Array(img.data.buffer);
@@ -597,7 +646,8 @@ export class DebuggerUI {
         for (let row = 0; row < 8; row++) plot8(cx, cy + row, c.ram[(bm + i * 8 + row) & 0xffff], colors, mcOn);
       }
     } else if (mode === 'sprites') {
-      const colors = this.gfxMc ? [0xff1a1a1a, pal[r[0x25] & 15], pal[1], pal[r[0x26] & 15]] : [0xff1a1a1a, pal[1]];
+      const k = this.sheetColours();
+      const colors = this.gfxMc ? [pal[k.bg], pal[k.mc1], pal[k.spr], pal[k.mc2]] : [pal[k.bg], pal[k.spr]];
       for (let s = 0; s < 64; s++) {
         const sx = (s & 7) * 24, sy = (s >> 3) * 21;
         const base = this.gfxAddr + s * 64;

@@ -373,6 +373,8 @@ fn dirname(p: String) -> String {
 
 #[tauri::command]
 fn home_dir(app: AppHandle) -> String { show(&home(&app)) }
+#[tauri::command]
+fn user_data_dir(app: AppHandle) -> String { let d = user_data(&app); let _ = std::fs::create_dir_all(&d); show(&d) }
 
 #[tauri::command]
 fn app_args(app: AppHandle) -> LaunchArgs {
@@ -580,7 +582,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             roms_find, roms_palettes, open_file, save_file, choose_dir, read_file, read_text, write_file,
-            list_dir, join_path, dirname, home_dir, app_args, settings_load, settings_save,
+            list_dir, join_path, dirname, home_dir, user_data_dir, app_args, settings_load, settings_save,
             toggle_fullscreen, set_title, toggle_devtools, capture_config, capture_log, capture_eval, capture_quit,
             binmon_listen, binmon_send
         ])

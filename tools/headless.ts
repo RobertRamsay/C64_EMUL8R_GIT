@@ -8,6 +8,7 @@ import { C64 } from '../src/core/c64';
 import { D64 } from '../src/core/d64';
 import { attachMedia, parseSid, startSid } from '../src/core/loaders';
 import { BinaryMonitor } from '../src/core/binmon';
+import { decodeSprite, encodeSprite, getPixel, readSpd, readSpriteFile, setPixel, spritesToAsm, transformSprite, writeSpd } from '../src/core/sprites';
 
 const candidates = [
   process.env.C64_ROMS,
@@ -402,6 +403,33 @@ if (roms.dos1541) {
   const img = c.currentDiskImage();
   const names = img ? new D64(img).directory().map((e) => e.nameStr) : [];
   check('true drive SAVE (GCR write + decode)', names.includes('COPY'), names.join(',') + '\n' + screenText(c));
+}
+
+
+// ---- sprite editor helpers (pure)
+{
+  const d = new Uint8Array(64);
+  setPixel(d, 0, 0, 2, false); setPixel(d, 23, 20, 2, false);
+  check('sprite hires set/get', d[0] === 0x80 && d[62] === 0x01 && getPixel(d, 23, 20, false) === 2 && getPixel(d, 1, 0, false) === 0);
+  const m = new Uint8Array(64);
+  setPixel(m, 0, 0, 1, true); setPixel(m, 3, 0, 3, true); setPixel(m, 22, 1, 2, true);
+  check('sprite multicolour set/get', m[0] === 0x70 && m[5] === 0x02 && getPixel(m, 2, 0, true) === 3 && getPixel(m, 23, 1, true) === 2, [...m.subarray(0, 6)].join(','));
+  check('sprite decode/encode round trip', encodeSprite(decodeSprite(m, true), true).subarray(0, 63).every((v, i) => v === m[i]));
+  const f = d.slice(); transformSprite(f, 'flipH', false);
+  check('sprite flip H', f[2] === 0x01 && f[60] === 0x80, [...f].join(','));
+  const mf = m.slice(); transformSprite(mf, 'flipH', true);
+  check('sprite flip H multicolour keeps pairs', getPixel(mf, 22, 0, true) === 1 && getPixel(mf, 20, 0, true) === 3 && getPixel(mf, 0, 1, true) === 2);
+  const sh = d.slice(); transformSprite(sh, 'right', false);
+  check('sprite shift right wraps', sh[0] === 0x40 && getPixel(sh, 0, 20, false) === 2);
+  const spd = writeSpd({ sprites: [{ data: d, mc: false, colour: 7 }, { data: m, mc: true, colour: 2 }], bg: 6, mc1: 11, mc2: 15 });
+  const back = readSpd(spd);
+  check('SpritePad write/read', back.sprites.length === 2 && back.bg === 6 && back.mc1 === 11 && back.mc2 === 15 && back.sprites[1].mc && back.sprites[1].colour === 2 && !back.sprites[0].mc && back.sprites[0].colour === 7 && back.sprites[1].data[0] === 0x70);
+  const prg = new Uint8Array(2 + 128); prg[0] = 0x00; prg[1] = 0x20; prg[2] = 0xaa;
+  const rf = readSpriteFile('x.prg', prg);
+  check('sprite PRG import strips load address', rf.loadAddr === 0x2000 && rf.sprites.length === 2 && rf.sprites[0][0] === 0xaa);
+  const asm = spritesToAsm([m], 0x2000, true, 'acme');
+  check('sprite ACME source', asm.includes('!byte $70, $00, $00') && asm.includes('sprite_0:') && asm.includes('pointer $80'), asm.slice(0, 300));
+  check('sprite KickAss source', spritesToAsm([d], 0x3000, false, 'kick').includes('.byte $80, $00, $00  // #.......'));
 }
 
 if (process.argv.includes('--dump')) writeFileSync('screen.txt', '');

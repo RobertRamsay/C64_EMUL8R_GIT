@@ -45,6 +45,7 @@ if (T && !(window as unknown as { host?: HostApi }).host) {
     joinPath: (...parts: string[]) => invoke('join_path', { parts }),
     dirname: (p: string) => invoke('dirname', { p }),
     homeDir: () => invoke('home_dir'),
+    userDataDir: () => invoke('user_data_dir'),
     args: () => invoke('app_args'),
     loadSettings: () => invoke('settings_load'),
     saveSettings: (s: unknown) => invoke('settings_save', { s }),

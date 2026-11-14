@@ -232,7 +232,7 @@ export class App {
     main.append(snap);
     dropdown(snap, () => [
       menuItem('Quick save state', () => this.quickSave(), 'Ctrl+S', 'save'),
-      menuItem('Quick load state', () => this.quickLoad(), 'Ctrl+L', 'load'),
+      menuItem('Quick load state', () => void this.quickLoad(), 'Ctrl+L', 'load'),
       h('hr'),
       menuItem('Save snapshot file…', () => this.saveSnapshotFile(), '', 'save'),
       menuItem('Load snapshot file…', () => this.openDialog(false, [{ name: 'Snapshot', extensions: ['c64s'] }]), '', 'load'),
@@ -318,7 +318,7 @@ export class App {
       else if (ctrl && e.code === 'KeyJ') this.swapPorts();
       else if (ctrl && e.code === 'KeyU') this.ultimate.toggle();
       else if (ctrl && e.code === 'KeyS') this.quickSave();
-      else if (ctrl && e.code === 'KeyL') this.quickLoad();
+      else if (ctrl && e.code === 'KeyL') void this.quickLoad();
       else if (ctrl && e.code === 'KeyD') this.setDebugger(!this.settings.ui.debugger);
       else if (ctrl && e.code === 'KeyP') this.togglePause();
       else if (ctrl && e.code === 'KeyZ') { if (!e.repeat || ++this.rewindHeld % 3 === 0) this.doRewind(); }
@@ -846,10 +846,24 @@ export class App {
     this.debugger.refresh(true);
     this.updateStatus();
   }
-  quickSave(): void { this.quickSnap = this.stateWithMedia(); toast('State saved (Ctrl+L to load)'); }
-  quickLoad(): void {
+  /** quick save lives in the app's data folder too, so it survives a restart */
+  private async quickSnapPath(): Promise<string | null> {
+    try { return await window.host.joinPath(await window.host.userDataDir(), 'quicksave.c64s'); } catch { return null; }
+  }
+  quickSave(): void {
+    this.quickSnap = this.stateWithMedia();
+    toast('State saved (Ctrl+L to load)');
+    const data = serializeState(this.quickSnap);
+    void this.quickSnapPath().then((p) => (p ? window.host.writeFile(p, data) : undefined))
+      .catch((e) => toast(`Quick save kept in memory only: ${e?.message ?? e}`, true));
+  }
+  async quickLoad(): Promise<void> {
+    if (!this.quickSnap) {
+      const p = await this.quickSnapPath();
+      try { if (p) this.quickSnap = deserializeState(await window.host.readFile(p)); } catch { /* no saved file yet */ }
+    }
     if (!this.quickSnap) { toast('No quick save yet (Ctrl+S)', true); return; }
-    this.loadStateObj(this.quickSnap);
+    try { this.loadStateObj(this.quickSnap); } catch (e: any) { this.quickSnap = null; toast(`Quick save could not be loaded: ${e?.message ?? e}`, true); return; }
     toast('State loaded');
   }
   async saveSnapshotFile(): Promise<void> {
