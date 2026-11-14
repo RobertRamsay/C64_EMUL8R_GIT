@@ -306,9 +306,18 @@ function check(name: string, ok: boolean, detail = ''): void {
   const off = c.cpuMhz === 1 && c.badlineStalls && c.peek(0xd030) === 0xfe;
   c.poke(0xd030, 0x01);
   const on = c.cpuMhz === 48 && c.peek(0xd030) === 0xff;
+  // Like the Ultimate: out of reset the enable bit is clear (1 MHz, badlines,
+  // so the KERNAL's disk routines work) until a program sets $D030 bit 0.
   c.reset();
-  const reset = c.cpuMhz === 8 && !c.badlineStalls;
-  check('turbo registers $D030/$D031', manual && fast && slow && off && on && reset, JSON.stringify({ manual, fast, slow, off, on, reset }));
+  const reset = c.cpuMhz === 1 && c.badlineStalls && c.peek(0xd030) === 0xfe;
+  c.poke(0xd030, 0x01);
+  const resetOn = c.cpuMhz === 8 && !c.badlineStalls;
+  // The other modes still come out of reset at the set speed.
+  c.applyConfig({ turboControl: 'registers' });
+  c.reset();
+  const resetRegs = c.cpuMhz === 8;
+  check('turbo registers $D030/$D031', manual && fast && slow && off && on && reset && resetOn && resetRegs,
+    JSON.stringify({ manual, fast, slow, off, on, reset, resetOn, resetRegs }));
 }
 
 // 4h. badline timing costs the CPU cycles in turbo: count INC passes in a frame

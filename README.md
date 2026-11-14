@@ -73,7 +73,7 @@ Palettes (`.vpl`) found next to the VICE ROMs are added to the palette list.
 **C64 Ultimate features**
 - REU from 128 KB to 16 MB, with DMA
 - CPU turbo up to 77 MHz (above 48 MHz, programs that compute without waiting can run below full speed)
-- Ultimate turbo registers (*Settings → Ultimate → Turbo control*): `$D031` bits 0–3 select the speed (the Ultimate 64 Elite-II table, index 15 = 64 MHz) and bit 7 turns badline timing off; with *Turbo Enable Bit*, `$D030` bit 0 = 0 drops to 1 MHz with badlines. *Badline timing* halts the CPU for badlines and sprite DMA in turbo too. A reset returns to the settings.
+- Ultimate turbo registers (*Settings → Ultimate → Turbo control*): `$D031` bits 0–3 select the speed (the Ultimate 64 Elite-II table, index 15 = 64 MHz) and bit 7 turns badline timing off; with *Turbo Enable Bit*, the machine comes out of reset at 1 MHz, as the Ultimate does, and `$D030` bit 0 switches the turbo on (1) and off (0, 1 MHz with badlines). *Badline timing* halts the CPU for badlines and sprite DMA in turbo too. A reset returns to the settings.
 - Dual SID at configurable addresses
 - Ultimate Command Interface ID at `$DF1C`
 - SID player

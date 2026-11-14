@@ -262,7 +262,10 @@ export class C64 implements CpuBus, VicMemory {
   }
 
   private clearTurboRegs(): void {
-    this.regMhz = -1; this.regBadlines = null; this.regTurboOn = true;
+    // With the Turbo Enable Bit the Ultimate comes out of reset at 1 MHz, like a
+    // C128 with $D030 = 0: the KERNAL (and its disk routines) run at normal speed
+    // until a program sets $D030 bit 0. The other modes start at the set speed.
+    this.regMhz = -1; this.regBadlines = null; this.regTurboOn = this.config.turboControl !== 'enableBit';
     this.applySpeed();
   }
 
