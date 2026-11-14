@@ -12,7 +12,7 @@ import { deserializeState, serializeState } from '../core/snapshot';
 import { AudioOut } from './audio';
 import { Video } from './video';
 import { InputManager, DEVICE_NAMES } from './input';
-import { Settings, loadSettings, saveSettings } from './settings';
+import { Settings, loadSettings, saveSettings, TURBO_SPEEDS } from './settings';
 import { btn, dropdown, h, menuItem, toast, clear, hex4 } from './ui/dom';
 import { openSettings } from './ui/settingsDialog';
 import { DebuggerUI } from './ui/debugger';
@@ -53,6 +53,9 @@ export class App {
   private pauseBtn!: HTMLButtonElement;
   private warpBtn!: HTMLButtonElement;
   private dbgBtn!: HTMLButtonElement;
+  private speedBtn!: HTMLButtonElement;
+  /** the file last autostarted: REBOOT loads it again */
+  private lastStart: { name: string; data: Uint8Array; path?: string } | null = null;
   binmon: BinaryMonitor | null = null;
   private binmonQueue: Promise<unknown> = Promise.resolve();
 
@@ -71,6 +74,9 @@ export class App {
     });
     this.c64.uci.onPalette = () => this.applyVideoSettings();
     this.buildToolbar();
+    document.getElementById('brand-ver')!.textContent = 'v' + __APP_VERSION__;
+    document.getElementById('st-version')!.textContent = 'v' + __APP_VERSION__;
+    window.host.setTitle(`C64EMUL8R ${__APP_VERSION__}`);
     this.debugger = new DebuggerUI(this);
     this.ultimate = new UltimateMenu(this);
     this.applySettings();
@@ -203,12 +209,24 @@ export class App {
     const reset = btn('', { icon: 'reset', title: 'Reset (Ctrl+R soft, Ctrl+Shift+R hard)' });
     main.append(reset);
     dropdown(reset, () => [
+      menuItem('Reboot last file', () => void this.reboot(), 'Ctrl+B', 'reboot'),
+      h('hr'),
       menuItem('Soft reset', () => this.reset(false), 'Ctrl+R'),
       menuItem('Hard reset (power cycle)', () => this.reset(true), 'Ctrl+Shift+R'),
       menuItem('Reset drive', () => this.c64.drive.reset()),
     ]);
+    main.append(btn('', { icon: 'reboot', title: 'Reboot: reset and start the last file again, read fresh from disk (Ctrl+B)', onClick: () => void this.reboot() }));
     this.warpBtn = btn('', { icon: 'warp', title: 'Warp mode (Ctrl+W)', onClick: () => this.setWarp(!this.warp) });
     main.append(this.warpBtn);
+    // CPU speed (Ultimate turbo): pick from the menu, or step with Ctrl+[ and Ctrl+]
+    this.speedBtn = btn('1 MHz', { icon: 'speed', title: 'CPU speed - Ultimate turbo (Ctrl+[ slower, Ctrl+] faster, Ctrl+1 back to 1 MHz)' });
+    main.append(this.speedBtn);
+    dropdown(this.speedBtn, () => [
+      h('div', { class: 'menu-title' }, 'CPU speed (Ultimate turbo)'),
+      ...TURBO_SPEEDS.map((s) => menuItem(`${s === this.settings.machine.turbo ? '\u25cf ' : '\u2003 '}${s} MHz${s === 1 ? ' (stock)' : ''}`, () => this.setTurbo(s))),
+      h('hr'),
+      menuItem('More turbo settings\u2026', () => openSettings(this), '', 'settings'),
+    ]);
     main.append(btn('', { icon: 'rewind', title: 'Rewind ~0.5 s (Ctrl+Z, hold to keep rewinding)', onClick: () => this.doRewind() }));
     const snap = btn('', { icon: 'camera', title: 'Snapshots' });
     main.append(snap);
@@ -292,6 +310,10 @@ export class App {
       else if (e.code === 'F12' && !e.ctrlKey) this.setDebugger(!this.settings.ui.debugger);
       else if (ctrl && e.code === 'KeyO') this.openDialog(true);
       else if (ctrl && e.code === 'KeyR') this.reset(e.shiftKey);
+      else if (ctrl && e.code === 'KeyB') void this.reboot();
+      else if (ctrl && e.code === 'BracketLeft') this.stepTurbo(-1);
+      else if (ctrl && e.code === 'BracketRight') this.stepTurbo(1);
+      else if (ctrl && e.code === 'Digit1') this.setTurbo(1);
       else if (ctrl && e.code === 'KeyW') this.setWarp(!this.warp);
       else if (ctrl && e.code === 'KeyJ') this.swapPorts();
       else if (ctrl && e.code === 'KeyU') this.ultimate.toggle();
@@ -363,6 +385,7 @@ export class App {
       // save the outgoing disk's changes before it is replaced
       if (isDisk) void this.flushDisk();
       const desc = attachMedia(this.c64, name, data, autostart);
+      if (autostart) this.lastStart = { name, data, path };
       if (isDisk) this.setDiskSource(name, path);
       this.mediaLabel = desc;
       this.running = true;
@@ -500,6 +523,45 @@ export class App {
     this.running = true;
     this.updatePauseUi();
     toast(hard ? 'Hard reset' : 'Reset');
+  }
+
+  /**
+   * Reset and start the last autostarted file again. A file that came from
+   * disk is read again, so a program that was rebuilt since runs as it is now.
+   * With nothing started yet this session, the newest recent file.
+   */
+  async reboot(): Promise<void> {
+    const last = this.lastStart;
+    const path = last ? last.path : this.settings.ui.recent[0];
+    if (!last && !path) { toast('Nothing to reboot yet: open a file first', true); return; }
+    if (path) {
+      try {
+        const data: Uint8Array = await window.host.readFile(path);
+        this.attach(path.split(/[\\/]/).pop() ?? path, data, true, path);
+        return;
+      } catch (e) {
+        if (!last) { toast('Cannot open ' + path + ': ' + (e as Error).message, true); return; }
+        toast('Could not read the file again: using the copy from before', true, 3000);
+      }
+    }
+    this.attach(last!.name, last!.data, true, last!.path);
+  }
+
+  /** CPU speed in MHz (the Ultimate turbo setting): applied now and kept. */
+  setTurbo(mhz: number): void {
+    this.settings.machine.turbo = mhz;
+    this.c64.applyConfig({ turbo: mhz });
+    this.persist();
+    this.updateStatus();
+    toast(mhz === 1 ? 'CPU 1 MHz (stock)' : `CPU ${mhz} MHz`, false, 1200);
+  }
+
+  /** One step slower (-1) or faster (+1) through the turbo speeds. */
+  stepTurbo(dir: number): void {
+    const cur = this.settings.machine.turbo;
+    let i = TURBO_SPEEDS.indexOf(cur);
+    if (i < 0) i = TURBO_SPEEDS.findIndex((s) => s >= cur);
+    this.setTurbo(TURBO_SPEEDS[Math.max(0, Math.min(TURBO_SPEEDS.length - 1, i + dir))]);
   }
 
   togglePause(): void { if (this.running) this.pause(); else this.resume(); }
@@ -912,6 +974,10 @@ export class App {
     document.getElementById('st-tape')!.textContent = t.tap ? `▣ ${t.playing ? '▶' : '■'} ${String(t.counter).padStart(3, '0')}` : '';
     document.getElementById('st-joy')!.textContent = `J1: ${this.portLabel(1)} | J2: ${this.portLabel(2)}`;
     document.getElementById('st-speed')!.textContent = this.running ? `${this.speedPct}%` : '';
+    // the speed button shows what the CPU runs at now (a program may have changed it through $D030/$D031)
+    const mhz = this.c64.cpuMhz, lab = this.speedBtn?.querySelector('span');
+    if (lab && lab.textContent !== `${mhz} MHz`) lab.textContent = `${mhz} MHz`;
+    this.speedBtn?.classList.toggle('on', mhz > 1);
     const cfg = this.c64.config;
     document.getElementById('st-model')!.textContent =
       `${cfg.video} · SID ${cfg.sidModel}${cfg.sid2Address ? ' + $' + hex4(cfg.sid2Address) : ''}${cfg.reuSize ? ' · REU ' + (cfg.reuSize >= 1024 ? cfg.reuSize / 1024 + 'MB' : cfg.reuSize + 'K') : ''}${this.c64.cpuMhz > 1 ? ' · ' + this.c64.cpuMhz + 'MHz' : ''}`;

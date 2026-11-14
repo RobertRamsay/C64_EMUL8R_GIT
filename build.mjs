@@ -1,6 +1,6 @@
 // Build script: bundles main, preload and renderer with esbuild.
 import * as esbuild from 'esbuild';
-import { cpSync, mkdirSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync } from 'node:fs';
 
 const watch = process.argv.includes('--watch');
 const tests = process.argv.includes('--tests');
@@ -13,7 +13,9 @@ const copyStatic = () => {
   cpSync('build/icon.png', 'dist/renderer/icon.png');
 };
 
-const common = { bundle: true, sourcemap: true, logLevel: 'info', target: 'es2022', loader: { '.prg': 'binary' } };
+// the version shown in the toolbar and status bar comes from package.json
+const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
+const common = { define: { __APP_VERSION__: JSON.stringify(version) }, bundle: true, sourcemap: true, logLevel: 'info', target: 'es2022', loader: { '.prg': 'binary' } };
 const builds = [
   { ...common, entryPoints: ['src/main/main.ts'], outfile: 'dist/main/main.js', platform: 'node', format: 'cjs', external: ['electron'] },
   { ...common, entryPoints: ['src/main/preload.ts'], outfile: 'dist/main/preload.js', platform: 'node', format: 'cjs', external: ['electron'] },
