@@ -104,6 +104,8 @@ export class C64 implements CpuBus, VicMemory {
   joy1 = 0; joy2 = 0;
 
   cycles = 0;
+  /** debugger: sees every SID register write (chip 0 = $D400, 1 = second SID) */
+  sidTap?: (chip: number, reg: number, v: number) => void;
   private turbo = 1;
   /** the CPU halts while BA is low */
   private baStall = true;
@@ -516,7 +518,9 @@ export class C64 implements CpuBus, VicMemory {
     }
     if (page <= 0xd7) {
       this.syncSid();
-      if (this.isSid2(addr)) this.sid2!.write(addr, v); else this.sid.write(addr, v);
+      const two = this.isSid2(addr);
+      if (two) this.sid2!.write(addr, v); else this.sid.write(addr, v);
+      if (this.sidTap) this.sidTap(two ? 1 : 0, addr & 0x1f, v);
       return;
     }
     if (page <= 0xdb) { this.colorRam[addr & 0x3ff] = v & 0x0f; return; }

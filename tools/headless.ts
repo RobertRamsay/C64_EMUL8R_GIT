@@ -8,6 +8,7 @@ import { C64 } from '../src/core/c64';
 import { D64 } from '../src/core/d64';
 import { attachMedia, parseSid, startSid } from '../src/core/loaders';
 import { BinaryMonitor } from '../src/core/binmon';
+import { SidRecorder, buildPsid, toTicks } from '../src/core/sidrecord';
 import { decodeSprite, encodeSprite, getPixel, readSpd, readSpriteFile, setPixel, spritesToAsm, transformSprite, writeSpd } from '../src/core/sprites';
 
 const candidates = [
@@ -421,6 +422,51 @@ if (roms.dos1541) {
   runFrames(c, 3);
   const seen = c.vic.spSeen.map((s) => `${s.n}:${s.addr.toString(16)}:${s.y}:${s.ye ? 'ye' : ''}`);
   check('sprites as displayed across a bank split', seen.join(' ') === '0:2000:64:ye 0:6040:160:ye', seen.join(' '));
+}
+
+
+// ---- Export SID: record a playing tune, build a PSID, play that back, compare
+{
+  // synthetic tune: init sets volume (and a 2x CIA timer when asked), play changes freq/pulse/gate
+  const tune = (cia2x: boolean) => {
+    const init = [0xa9, 0x0f, 0x8d, 0x18, 0xd4, 0xa9, 0x00, 0x8d, 0x00, 0x11, 0xa9, 0x09, 0x8d, 0x05, 0xd4,
+      ...(cia2x ? [0xa9, 0x64, 0x8d, 0x04, 0xdc, 0xa9, 0x26, 0x8d, 0x05, 0xdc] : []), 0x60];
+    const play = [0xee, 0x00, 0x11, 0xad, 0x00, 0x11, 0x8d, 0x01, 0xd4, 0x0a, 0x8d, 0x02, 0xd4,
+      0x29, 0x08, 0x4a, 0x4a, 0x4a, 0x09, 0x40, 0x8d, 0x04, 0xd4, 0x60];
+    const body = [...init, ...new Array(0x40 - init.length).fill(0xea), ...play];
+    const h = new Uint8Array(0x7c + 2 + body.length);
+    const dv = new DataView(h.buffer);
+    h.set([0x50, 0x53, 0x49, 0x44]); dv.setUint16(4, 2); dv.setUint16(6, 0x7c);
+    dv.setUint16(0x0a, 0x1000); dv.setUint16(0x0c, 0x1040); dv.setUint16(0x0e, 1); dv.setUint16(0x10, 1);
+    dv.setUint32(0x12, cia2x ? 1 : 0); dv.setUint16(0x76, 0x14);
+    h[0x7c] = 0x00; h[0x7d] = 0x10; h.set(body, 0x7e);
+    return h;
+  };
+  const statesOf = (rec: SidRecorder, frame: number) => {
+    const st = rec.startRegs.slice();
+    return toTicks(rec.writes, frame).ticks.map((t) => { for (const w of t) st[w.r] = w.v; return Array.from(st).join(','); });
+  };
+  const record = (psid: Uint8Array, frames: number) => {
+    const c = machine(false);
+    runFrames(c, 100);
+    startSid(c, parseSid(psid), 0);
+    runFrames(c, 20);
+    const rec = new SidRecorder(c);
+    runFrames(c, frames);
+    rec.stop();
+    return { c, rec, frame: c.vic.model.cyclesPerLine * c.vic.model.lines };
+  };
+  for (const cia of [false, true]) {
+    const a = record(tune(cia), 150);
+    const built = buildPsid(a.rec, a.frame, { name: 'Test', author: 'C64EMUL8R', released: '2026', ntsc: false, model: '6581' });
+    check(`export SID detects ${cia ? '2x CIA' : '1x'} speed`, built.speed === (cia ? 2 : 1), `speed ${built.speed}`);
+    const b = record(built.psid, 150);
+    const sa = statesOf(a.rec, a.frame), sb = statesOf(b.rec, b.frame);
+    // B starts recording 20 frames into the replay, so A's states from tick ~20 on appear in B in order
+    const skip = 20 * built.speed;
+    const want = sa.slice(skip, skip + 100).join('|');
+    check(`export SID replays the same register states (${cia ? '2x' : '1x'})`, sb.join('|').includes(want), `a ${sa.length} ticks, b ${sb.length}; ${sa[1]} / ${sb[1]}`);
+  }
 }
 
 // ---- sprite editor helpers (pure)

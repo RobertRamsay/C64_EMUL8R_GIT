@@ -326,3 +326,5 @@ input[type=range] { accent-color: var(--accent); }
 .se-tools { display: flex; flex-wrap: wrap; gap: 3px; }
 .se-warn { color: var(--warn); font-size: 11px; }
 .se-warn:empty { display: none; }
+
+.btn.rec { color: #ff6b6b; border-color: #ff6b6b; }

@@ -11,6 +11,7 @@ import { btn, clear, h, toast } from './dom';
 import { SpriteEditor, colourPicker, exportMenu, importSprites, vicColours } from './spriteEditor';
 import type { SpriteColours } from '../../core/sprites';
 import type { SpriteSeen } from '../../core/vic';
+import { SidRecorder, buildPsid } from '../../core/sidrecord';
 
 type Tab = { id: string; label: string; render: (el: HTMLElement) => void; update: (full: boolean) => void };
 
@@ -683,8 +684,56 @@ export class DebuggerUI {
   // ----------------------------------------------------------------- SID
   private renderSid(el: HTMLElement): void {
     this.els.sid = h('div', { class: 'panel-body' });
-    el.append(h('div', { class: 'panel-head' }, h('h3', {}, 'SID'), h('span', { class: 'hint' }, 'tick to mute a voice')), this.els.sid);
+    this.els.sidRecBtn = btn('', { cls: 'small', onClick: () => void this.toggleSidRecord() });
+    this.els.sidRecInfo = h('span', { class: 'hint mono' });
+    el.append(h('div', { class: 'panel-head' }, h('h3', {}, 'SID'), h('span', { class: 'hint' }, 'tick to mute a voice'),
+      h('span', { class: 'tb-spacer' }), this.els.sidRecInfo, this.els.sidRecBtn), this.els.sid);
     this.sidBuilt = false;
+    this.paintSidRecord();
+  }
+
+  // ---- Export SID: record the SID writes of whatever is playing, save a PSID that replays them
+  private sidRec: SidRecorder | null = null;
+  private sidRecTimer = 0;
+  private paintSidRecord(): void {
+    const b = this.els.sidRecBtn, info = this.els.sidRecInfo;
+    if (!b) return;
+    const r = this.sidRec;
+    b.textContent = r ? '■ Stop & save .sid' : '● Export SID…';
+    b.title = r ? 'Stop recording and save the tune as a .sid file'
+      : 'Record the music that is playing now (start at the beginning of the tune, stop when it loops) and save it as a .sid that plays in VICE, sidplay and C64EMUL8R';
+    b.classList.toggle('rec', !!r);
+    info.textContent = r ? `recording ${r.seconds.toFixed(1)} s · ${r.writes.length} writes` : '';
+  }
+  private async toggleSidRecord(): Promise<void> {
+    const app = this.app, c = app.c64;
+    if (!this.sidRec) {
+      this.sidRec = new SidRecorder(c);
+      this.sidRecTimer = window.setInterval(() => this.paintSidRecord(), 250);
+      if (!app.running) toast('Recording SID writes - resume the machine to record the music');
+      this.paintSidRecord();
+      return;
+    }
+    const rec = this.sidRec;
+    rec.stop();
+    this.sidRec = null;
+    clearInterval(this.sidRecTimer);
+    this.paintSidRecord();
+    try {
+      const m = c.vic.model, frame = m.cyclesPerLine * m.lines;
+      const label = (app.sidInfo?.name || app.mediaLabel.replace(/^(Disk|Tape|Program|Cartridge|PRG|SID)\s+/i, '').replace(/\.[a-z0-9]{1,4}$/i, '') || 'Recorded tune').slice(0, 32);
+      const built = buildPsid(rec, frame, {
+        name: label, author: app.sidInfo?.author || '<?>',
+        released: `${new Date().getFullYear()} recorded with C64EMUL8R`.slice(0, 32),
+        ntsc: c.config.video !== 'PAL', model: c.sid.model === '8580' ? '8580' : '6581',
+      });
+      const file = label.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_') || 'tune';
+      const p = await window.host.saveFile(`${file}.sid`, built.psid, [{ name: 'SID tune', extensions: ['sid'] }]);
+      if (p) {
+        const speed = built.speed > 1 ? `${built.speed}x speed, ` : '';
+        toast(`Saved ${built.seconds.toFixed(1)} s of music (${speed}${(built.psid.length / 1024).toFixed(1)} KB)${built.truncated ? ' - cut short: the recording was too long to fit in C64 memory' : ''}`, built.truncated, 5000);
+      }
+    } catch (e: any) { toast(`Export SID failed: ${e?.message ?? e}`, true, 4000); }
   }
   private sidBuilt = false;
 
