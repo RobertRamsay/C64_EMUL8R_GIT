@@ -220,7 +220,8 @@ export function exportMenu(app: App, info: () => { addr: number; count: number; 
 }
 
 // ------------------------------------------------------------- editor window
-export interface EditorTarget { addr: number; mc: boolean; cols: SpriteColours; live?: number }
+/** vicCols: the registers as they were when the VIC showed the sprite (split screens change them mid-frame) */
+export interface EditorTarget { addr: number; mc: boolean; cols: SpriteColours; live?: number; vicCols?: SpriteColours }
 
 const CELL = 14;
 
@@ -245,6 +246,7 @@ export class SpriteEditor {
   private addr = 0x2000;
   private mc = false;
   private live: number | undefined;
+  private vicCols: SpriteColours | undefined;
   private cols: SpriteColours = { bg: 6, mc1: 2, spr: 1, mc2: 7 };
   private pen = [2, 0]; // left, right
   private shown = '';
@@ -271,7 +273,7 @@ export class SpriteEditor {
       btn('◀', { cls: 'small', title: 'Previous sprite (-$40)', onClick: () => this.step(-1) }), this.addrIn,
       btn('▶', { cls: 'small', title: 'Next sprite (+$40)', onClick: () => this.step(1) }),
       h('label', { class: 'chk' }, this.mcBox, 'multicolour'),
-      btn('VIC colours', { cls: 'small', title: 'Take the preview colours from the VIC registers', onClick: () => { this.cols = vicColours(this.app, this.live ?? 0); this.syncSlots(); this.draw(true); } }));
+      btn('VIC colours', { cls: 'small', title: 'Take the preview colours from the VIC registers', onClick: () => { this.cols = { ...(this.vicCols ?? vicColours(this.app, this.live ?? 0)) }; this.syncSlots(); this.draw(true); } }));
 
     const slots = h('div', { class: 'se-slots' });
     for (let s = 0; s < 4; s++) {
@@ -358,7 +360,7 @@ export class SpriteEditor {
   }
 
   retarget(t: EditorTarget): void {
-    this.addr = t.addr & 0xffff; this.mc = t.mc; this.cols = { ...t.cols }; this.live = t.live;
+    this.addr = t.addr & 0xffff; this.mc = t.mc; this.cols = { ...t.cols }; this.live = t.live; this.vicCols = t.vicCols;
     this.mcBox.checked = this.mc;
     this.syncSlots();
     this.draw(true);

@@ -406,6 +406,23 @@ if (roms.dos1541) {
 }
 
 
+
+// ---- debugger: sprites as displayed, through a mid-frame VIC bank switch
+{
+  const c = machine(false);
+  runFrames(c, 120);
+  // wait line $30: bank 0, sprite Y 64 / wait line $90: bank 1, sprite Y 160 / loop
+  const code = [0x78, 0xa9, 0x30, 0xcd, 0x12, 0xd0, 0xd0, 0xfb, 0xa9, 0x03, 0x8d, 0x00, 0xdd, 0xa9, 0x40, 0x8d, 0x01, 0xd0,
+    0xa9, 0x90, 0xcd, 0x12, 0xd0, 0xd0, 0xfb, 0xa9, 0x02, 0x8d, 0x00, 0xdd, 0xa9, 0xa0, 0x8d, 0x01, 0xd0, 0x4c, 0x01, 0xc0];
+  c.ram.set(code, 0xc000);
+  c.ram[0x07f8] = 0x80; c.ram[0x47f8] = 0x81;
+  c.poke(0xd015, 1); c.poke(0xd000, 100); c.poke(0xd017, 1); c.poke(0xd027, 7);
+  c.cpu.pc = 0xc000;
+  runFrames(c, 3);
+  const seen = c.vic.spSeen.map((s) => `${s.n}:${s.addr.toString(16)}:${s.y}:${s.ye ? 'ye' : ''}`);
+  check('sprites as displayed across a bank split', seen.join(' ') === '0:2000:64:ye 0:6040:160:ye', seen.join(' '));
+}
+
 // ---- sprite editor helpers (pure)
 {
   const d = new Uint8Array(64);

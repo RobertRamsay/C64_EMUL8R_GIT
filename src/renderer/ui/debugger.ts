@@ -10,6 +10,7 @@ import { C64_COLOR_NAMES } from '../../core/palettes';
 import { btn, clear, h, toast } from './dom';
 import { SpriteEditor, colourPicker, exportMenu, importSprites, vicColours } from './spriteEditor';
 import type { SpriteColours } from '../../core/sprites';
+import type { SpriteSeen } from '../../core/vic';
 
 type Tab = { id: string; label: string; render: (el: HTMLElement) => void; update: (full: boolean) => void };
 
@@ -501,19 +502,35 @@ export class DebuggerUI {
   // ------------------------------------------------------------- sprites
   private renderSprites(el: HTMLElement): void {
     this.els.sprites = h('div', { class: 'sprites' });
-    for (let i = 0; i < 8; i++) {
-      const cell = h('div', { class: 'sprite-cell edit', title: `Edit sprite #${i}` }, h('canvas', { width: 24, height: 21, class: 'pix' }), h('div', { class: 'si' }));
-      cell.addEventListener('click', () => this.editLiveSprite(i));
-      this.els.sprites.append(cell);
-    }
-    el.append(h('div', { class: 'panel-head' }, h('h3', {}, 'Sprites'), h('span', { class: 'hint' }, 'live from VIC bank + pointers · click one to edit')), h('div', { class: 'panel-body' }, this.els.sprites));
+    el.append(h('div', { class: 'panel-head' }, h('h3', {}, 'Sprites'),
+      h('span', { class: 'hint', title: 'Recorded as the VIC fetched them, so split screens and multiplexers show what was really on screen' }, 'as displayed last frame · click one to edit')),
+      h('div', { class: 'panel-body' }, this.els.sprites));
   }
 
-  private editLiveSprite(i: number): void {
-    const c = this.app.c64, r = c.vic.regs;
-    const bank = (3 - (c.cia2.portAOut() & 3)) << 14;
-    const ptr = c.vicRead(c.vic.screenAddr() + 0x3f8 + i);
-    SpriteEditor.open(this.app, { addr: bank + (ptr << 6), mc: !!(r[0x1c] & (1 << i)), cols: vicColours(this.app, i), live: i });
+  private sprItems: (SpriteSeen & { off?: boolean })[] = [];
+
+  /** Every sprite the VIC displayed last frame, then the hardware sprites it didn't show. */
+  private spriteItems(): (SpriteSeen & { off?: boolean })[] {
+    const c = this.app.c64, v = c.vic, r = v.regs;
+    const items: (SpriteSeen & { off?: boolean })[] = [...v.spSeen];
+    for (let i = 0; i < 8; i++) {
+      if (items.some((s) => s.n === i)) continue;
+      const ptr = c.vicRead(v.screenAddr() + 0x3f8 + i), b = 1 << i;
+      const abs = c.vicAbs(ptr << 6);
+      items.push({
+        n: i, addr: abs < 0 ? ptr << 6 : abs, rom: abs < 0, ptr, x: v.spX[i], y: v.spY[i], off: true,
+        mc: !!(r[0x1c] & b), col: r[0x27 + i] & 15, mc1: r[0x25] & 15, mc2: r[0x26] & 15, xe: !!(r[0x1d] & b), ye: !!(r[0x17] & b), behind: !!(r[0x1b] & b),
+      });
+    }
+    return items;
+  }
+
+  private editLiveSprite(k: number): void {
+    const s = this.sprItems[k];
+    if (!s) return;
+    if (s.rom) { toast("That sprite's data is in the character ROM, so it can't be edited", true); return; }
+    const cols = { bg: this.app.c64.vic.regs[0x21] & 15, mc1: s.mc1, spr: s.col, mc2: s.mc2 };
+    SpriteEditor.open(this.app, { addr: s.addr, mc: s.mc, cols, vicCols: cols, live: s.n });
   }
 
   /** Sheet colours with VIC fallbacks filled in. */
@@ -525,31 +542,37 @@ export class DebuggerUI {
   private updateSprites(): void {
     const el = this.els.sprites;
     if (!el?.isConnected) return;
-    const c = this.app.c64, v = c.vic, r = v.regs;
+    const c = this.app.c64;
     const pal = this.app.video.palette;
-    const vm = v.screenAddr();
-    el.querySelectorAll<HTMLElement>('.sprite-cell').forEach((cell, i) => {
-      const ptr = c.vicRead(vm + 0x3f8 + i);
-      const base = ptr << 6;
-      const cv = cell.querySelector('canvas')!;
-      const ctx = cv.getContext('2d')!;
+    const items = (this.sprItems = this.spriteItems());
+    let cells = el.querySelectorAll<HTMLElement>('.sprite-cell');
+    if (cells.length !== items.length) {
+      el.textContent = '';
+      items.forEach((_s, k) => {
+        const cell = h('div', { class: 'sprite-cell edit' }, h('canvas', { width: 24, height: 21, class: 'pix' }), h('div', { class: 'si' }));
+        cell.addEventListener('click', () => this.editLiveSprite(k));
+        el.append(cell);
+      });
+      cells = el.querySelectorAll<HTMLElement>('.sprite-cell');
+    }
+    items.forEach((s, k) => {
+      const cell = cells[k];
+      const ctx = cell.querySelector('canvas')!.getContext('2d')!;
       const img = ctx.createImageData(24, 21);
       const d = new Uint32Array(img.data.buffer);
-      const mc = r[0x1c] & (1 << i);
-      const cols = [0xff1a1a1a, pal[r[0x25] & 15], pal[r[0x27 + i] & 15], pal[r[0x26] & 15]];
+      const cols = [0xff1a1a1a, pal[s.mc1], pal[s.col], pal[s.mc2]];
+      const rd = (o: number) => (s.rom ? c.chargen[(s.addr + o) & 0xfff] : c.ram[(s.addr + o) & 0xffff]);
       for (let y = 0; y < 21; y++) {
         for (let x = 0; x < 24; x++) {
-          const byte = c.vicRead((base + y * 3 + (x >> 3)) & 0x3fff);
-          let ci: number;
-          if (mc) ci = (byte >> (6 - ((x & 7) & ~1))) & 3;
-          else ci = (byte >> (7 - (x & 7))) & 1 ? 2 : 0;
+          const byte = rd(y * 3 + (x >> 3));
+          const ci = s.mc ? (byte >> (6 - ((x & 7) & ~1))) & 3 : (byte >> (7 - (x & 7))) & 1 ? 2 : 0;
           d[y * 24 + x] = cols[ci];
         }
       }
       ctx.putImageData(img, 0, 0);
-      cell.classList.toggle('off', !(r[0x15] & (1 << i)));
-      const b = (reg: number) => (r[reg] >> i) & 1;
-      cell.querySelector('.si')!.innerHTML = `#${i} X${v.spX[i]} Y${v.spY[i]}<br>ptr $${hex2(ptr)} @$${hex4(((3 - (c.cia2.portAOut() & 3)) << 14) + base)}<br>${b(0x1c) ? 'MC ' : ''}${b(0x1d) ? 'XE ' : ''}${b(0x17) ? 'YE ' : ''}${b(0x1b) ? 'BG ' : ''}`;
+      cell.classList.toggle('off', !!s.off);
+      cell.title = s.off ? `Sprite #${s.n} was not displayed last frame (registers as they are now)` : `Edit sprite #${s.n}`;
+      cell.querySelector('.si')!.innerHTML = `#${s.n} X${s.x} Y${s.y}<br>ptr $${hex2(s.ptr)} ${s.rom ? 'char ROM' : `@$${hex4(s.addr)}`}<br>${s.mc ? 'MC ' : ''}${s.xe ? 'XE ' : ''}${s.ye ? 'YE ' : ''}${s.behind ? 'BG ' : ''}`;
     });
   }
 

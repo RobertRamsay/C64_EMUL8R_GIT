@@ -366,6 +366,11 @@ export class C64 implements CpuBus, VicMemory {
   get kernalMapped(): boolean { return this.readMap[0xf] === M_KERNAL; }
 
   // VIC memory interface
+  vicAbs(addr: number): number {
+    addr &= 0x3fff;
+    if (!this.ultimax && this.vicCharRom && (addr & 0x3000) === 0x1000) return -1;
+    return this.vicBankBase | addr;
+  }
   vicRead(addr: number): number {
     addr &= 0x3fff;
     if (this.ultimax) {
