@@ -8,6 +8,10 @@ import { disassemble, findPrevInstr, hex2, hex4, opLength } from '../../core/dis
 import { Monitor, historyLines, petsciiChar } from '../../core/monitor';
 import { C64_COLOR_NAMES } from '../../core/palettes';
 import { btn, clear, h, toast } from './dom';
+import { SpriteEditor, colourPicker, exportMenu, importSprites, vicColours } from './spriteEditor';
+import type { SpriteColours } from '../../core/sprites';
+import type { SpriteSeen } from '../../core/vic';
+import { SidRecorder, buildPsid } from '../../core/sidrecord';
 
 type Tab = { id: string; label: string; render: (el: HTMLElement) => void; update: (full: boolean) => void };
 
@@ -24,6 +28,9 @@ export class DebuggerUI {
   private gfxMode = 'charset-vic';
   private gfxAddr = 0x2000;
   private gfxMc = false;
+  /** sprite sheet preview colours; null = from the VIC registers */
+  private sheetCols: Record<keyof SpriteColours, number | null> = { bg: null, mc1: null, spr: null, mc2: null };
+  private sheetCount = 64;
   private monOut!: HTMLElement;
   private monHistory: string[] = [];
   private monHistPos = 0;
@@ -96,6 +103,7 @@ export class DebuggerUI {
   }
 
   refresh(full: boolean): void {
+    if (full) { this.paintSidRecord(); this.recTick(); }
     if (!this.app.settings.ui.debugger) return;
     this.updateCpu();
     this.updateDisasm();
@@ -496,40 +504,77 @@ export class DebuggerUI {
   // ------------------------------------------------------------- sprites
   private renderSprites(el: HTMLElement): void {
     this.els.sprites = h('div', { class: 'sprites' });
+    el.append(h('div', { class: 'panel-head' }, h('h3', {}, 'Sprites'),
+      h('span', { class: 'hint', title: 'Recorded as the VIC fetched them, so split screens and multiplexers show what was really on screen' }, 'as displayed last frame · click one to edit')),
+      h('div', { class: 'panel-body' }, this.els.sprites));
+  }
+
+  private sprItems: (SpriteSeen & { off?: boolean })[] = [];
+
+  /** Every sprite the VIC displayed last frame, then the hardware sprites it didn't show. */
+  private spriteItems(): (SpriteSeen & { off?: boolean })[] {
+    const c = this.app.c64, v = c.vic, r = v.regs;
+    const items: (SpriteSeen & { off?: boolean })[] = [...v.spSeen];
     for (let i = 0; i < 8; i++) {
-      this.els.sprites.append(h('div', { class: 'sprite-cell' }, h('canvas', { width: 24, height: 21, class: 'pix' }), h('div', { class: 'si' })));
+      if (items.some((s) => s.n === i)) continue;
+      const ptr = c.vicRead(v.screenAddr() + 0x3f8 + i), b = 1 << i;
+      const abs = c.vicAbs(ptr << 6);
+      items.push({
+        n: i, addr: abs < 0 ? ptr << 6 : abs, rom: abs < 0, ptr, x: v.spX[i], y: v.spY[i], off: true,
+        mc: !!(r[0x1c] & b), col: r[0x27 + i] & 15, mc1: r[0x25] & 15, mc2: r[0x26] & 15, xe: !!(r[0x1d] & b), ye: !!(r[0x17] & b), behind: !!(r[0x1b] & b),
+      });
     }
-    el.append(h('div', { class: 'panel-head' }, h('h3', {}, 'Sprites'), h('span', { class: 'hint' }, 'live from VIC bank + pointers')), h('div', { class: 'panel-body' }, this.els.sprites));
+    return items;
+  }
+
+  private editLiveSprite(k: number): void {
+    const s = this.sprItems[k];
+    if (!s) return;
+    if (s.rom) { toast("That sprite's data is in the character ROM, so it can't be edited", true); return; }
+    const cols = { bg: this.app.c64.vic.regs[0x21] & 15, mc1: s.mc1, spr: s.col, mc2: s.mc2 };
+    SpriteEditor.open(this.app, { addr: s.addr, mc: s.mc, cols, vicCols: cols, live: s.n });
+  }
+
+  /** Sheet colours with VIC fallbacks filled in. */
+  private sheetColours(): SpriteColours {
+    const v = vicColours(this.app, 0), k = this.sheetCols;
+    return { bg: k.bg ?? v.bg, mc1: k.mc1 ?? v.mc1, spr: k.spr ?? v.spr, mc2: k.mc2 ?? v.mc2 };
   }
 
   private updateSprites(): void {
     const el = this.els.sprites;
     if (!el?.isConnected) return;
-    const c = this.app.c64, v = c.vic, r = v.regs;
+    const c = this.app.c64;
     const pal = this.app.video.palette;
-    const vm = v.screenAddr();
-    el.querySelectorAll<HTMLElement>('.sprite-cell').forEach((cell, i) => {
-      const ptr = c.vicRead(vm + 0x3f8 + i);
-      const base = ptr << 6;
-      const cv = cell.querySelector('canvas')!;
-      const ctx = cv.getContext('2d')!;
+    const items = (this.sprItems = this.spriteItems());
+    let cells = el.querySelectorAll<HTMLElement>('.sprite-cell');
+    if (cells.length !== items.length) {
+      el.textContent = '';
+      items.forEach((_s, k) => {
+        const cell = h('div', { class: 'sprite-cell edit' }, h('canvas', { width: 24, height: 21, class: 'pix' }), h('div', { class: 'si' }));
+        cell.addEventListener('click', () => this.editLiveSprite(k));
+        el.append(cell);
+      });
+      cells = el.querySelectorAll<HTMLElement>('.sprite-cell');
+    }
+    items.forEach((s, k) => {
+      const cell = cells[k];
+      const ctx = cell.querySelector('canvas')!.getContext('2d')!;
       const img = ctx.createImageData(24, 21);
       const d = new Uint32Array(img.data.buffer);
-      const mc = r[0x1c] & (1 << i);
-      const cols = [0xff1a1a1a, pal[r[0x25] & 15], pal[r[0x27 + i] & 15], pal[r[0x26] & 15]];
+      const cols = [0xff1a1a1a, pal[s.mc1], pal[s.col], pal[s.mc2]];
+      const rd = (o: number) => (s.rom ? c.chargen[(s.addr + o) & 0xfff] : c.ram[(s.addr + o) & 0xffff]);
       for (let y = 0; y < 21; y++) {
         for (let x = 0; x < 24; x++) {
-          const byte = c.vicRead((base + y * 3 + (x >> 3)) & 0x3fff);
-          let ci: number;
-          if (mc) ci = (byte >> (6 - ((x & 7) & ~1))) & 3;
-          else ci = (byte >> (7 - (x & 7))) & 1 ? 2 : 0;
+          const byte = rd(y * 3 + (x >> 3));
+          const ci = s.mc ? (byte >> (6 - ((x & 7) & ~1))) & 3 : (byte >> (7 - (x & 7))) & 1 ? 2 : 0;
           d[y * 24 + x] = cols[ci];
         }
       }
       ctx.putImageData(img, 0, 0);
-      cell.classList.toggle('off', !(r[0x15] & (1 << i)));
-      const b = (reg: number) => (r[reg] >> i) & 1;
-      cell.querySelector('.si')!.innerHTML = `#${i} X${v.spX[i]} Y${v.spY[i]}<br>ptr $${hex2(ptr)} @$${hex4(((3 - (c.cia2.portAOut() & 3)) << 14) + base)}<br>${b(0x1c) ? 'MC ' : ''}${b(0x1d) ? 'XE ' : ''}${b(0x17) ? 'YE ' : ''}${b(0x1b) ? 'BG ' : ''}`;
+      cell.classList.toggle('off', !!s.off);
+      cell.title = s.off ? `Sprite #${s.n} was not displayed last frame (registers as they are now)` : `Edit sprite #${s.n}`;
+      cell.querySelector('.si')!.innerHTML = `#${s.n} X${s.x} Y${s.y}<br>ptr $${hex2(s.ptr)} ${s.rom ? 'char ROM' : `@$${hex4(s.addr)}`}<br>${s.mc ? 'MC ' : ''}${s.xe ? 'XE ' : ''}${s.ye ? 'YE ' : ''}${s.behind ? 'BG ' : ''}`;
     });
   }
 
@@ -544,7 +589,33 @@ export class DebuggerUI {
     const mc = h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: this.gfxMc, onChange: (e: Event) => { this.gfxMc = (e.target as HTMLInputElement).checked; this.updateGfx(); } }), 'multicolor');
     const step = (d: number) => btn(d > 0 ? '+' : '−', { cls: 'small', onClick: () => { const s = this.gfxMode === 'sprites' ? 0x40 * 16 : this.gfxMode === 'bitmap' ? 0x2000 : 0x800; this.gfxAddr = (this.gfxAddr + d * s) & 0xffff; addr.value = hex4(this.gfxAddr); this.updateGfx(); } });
     this.els.gfx = h('canvas', { class: 'pix', width: 320, height: 200, style: 'width:100%;max-width:640px' });
-    el.append(h('div', { class: 'panel-head' }, h('h3', {}, 'Graphics'), mode, addr, step(-1), step(1), mc), h('div', { class: 'panel-body' }, this.els.gfx));
+    // sprite sheet: preview colours, export/import, click a sprite to edit it
+    const vic = () => vicColours(this.app, 0);
+    const pick = (k: keyof SpriteColours, label: string) => h('span', { class: 'cp-lab' }, label,
+      colourPicker(this.app, label, () => this.sheetCols[k], (v) => { this.sheetCols[k] = v; this.updateGfx(); }, () => vic()[k]));
+    const count = h('input', { class: 'inp', type: 'number', min: '1', max: '256', value: String(this.sheetCount), style: 'width:52px', title: 'How many sprites to export, from the address' }) as HTMLInputElement;
+    count.addEventListener('keydown', (e) => e.stopPropagation());
+    count.addEventListener('change', () => { this.sheetCount = Math.max(1, Math.min(256, parseInt(count.value) || 64)); count.value = String(this.sheetCount); });
+    const sheetInfo = () => ({ addr: this.gfxAddr, count: this.sheetCount, mc: this.gfxMc, cols: this.sheetColours() });
+    this.els.gfxSpr = h('div', { class: 'panel-head sub' }, pick('bg', 'BG'), pick('mc1', 'MC1'), pick('spr', 'Sprite'), pick('mc2', 'MC2'),
+      h('span', { class: 'tb-spacer' }), count, exportMenu(this.app, sheetInfo, true),
+      btn('Import', { cls: 'small', icon: 'load', title: 'Load sprites (.spd, .bin, .prg, .png) into RAM at this address', onClick: async () => {
+        const r = await importSprites(this.app, this.gfxAddr, this.gfxMc, this.sheetColours());
+        if (r?.spdCols) {
+          this.sheetCols = { ...r.spdCols }; this.gfxMc = !!r.spdMc;
+          (mc.querySelector('input') as HTMLInputElement).checked = this.gfxMc;
+          this.els.gfxSpr.querySelectorAll<any>('.cpick').forEach((b) => b.repaint());
+        }
+        this.updateGfx();
+      } }));
+    this.els.gfx.addEventListener('click', (e) => {
+      if (this.gfxMode !== 'sprites') return;
+      const r = this.els.gfx.getBoundingClientRect();
+      const sx = Math.floor(((e.clientX - r.left) / r.width) * 8), sy = Math.floor(((e.clientY - r.top) / r.height) * 8);
+      if (sx < 0 || sy < 0 || sx > 7 || sy > 7) return;
+      SpriteEditor.open(this.app, { addr: (this.gfxAddr + (sy * 8 + sx) * 64) & 0xffff, mc: this.gfxMc, cols: this.sheetColours() });
+    });
+    el.append(h('div', { class: 'panel-head' }, h('h3', {}, 'Graphics'), mode, addr, step(-1), step(1), mc), this.els.gfxSpr, h('div', { class: 'panel-body' }, this.els.gfx));
   }
 
   private updateGfx(): void {
@@ -563,6 +634,9 @@ export class DebuggerUI {
     if (mode === 'screen' || mode === 'bitmap' || mode === 'bitmap-vic') { w = 320; hgt = 200; }
     else if (mode === 'sprites') { w = 24 * 8; hgt = 21 * 8; }
     if (cv.width !== w || cv.height !== hgt) { cv.width = w; cv.height = hgt; }
+    this.els.gfxSpr.style.display = mode === 'sprites' ? '' : 'none';
+    cv.style.cursor = mode === 'sprites' ? 'crosshair' : '';
+    cv.title = mode === 'sprites' ? 'Click a sprite to edit it' : '';
     const ctx = cv.getContext('2d')!;
     const img = ctx.createImageData(w, hgt);
     const d = new Uint32Array(img.data.buffer);
@@ -597,7 +671,8 @@ export class DebuggerUI {
         for (let row = 0; row < 8; row++) plot8(cx, cy + row, c.ram[(bm + i * 8 + row) & 0xffff], colors, mcOn);
       }
     } else if (mode === 'sprites') {
-      const colors = this.gfxMc ? [0xff1a1a1a, pal[r[0x25] & 15], pal[1], pal[r[0x26] & 15]] : [0xff1a1a1a, pal[1]];
+      const k = this.sheetColours();
+      const colors = this.gfxMc ? [pal[k.bg], pal[k.mc1], pal[k.spr], pal[k.mc2]] : [pal[k.bg], pal[k.spr]];
       for (let s = 0; s < 64; s++) {
         const sx = (s & 7) * 24, sy = (s >> 3) * 21;
         const base = this.gfxAddr + s * 64;
@@ -610,8 +685,64 @@ export class DebuggerUI {
   // ----------------------------------------------------------------- SID
   private renderSid(el: HTMLElement): void {
     this.els.sid = h('div', { class: 'panel-body' });
-    el.append(h('div', { class: 'panel-head' }, h('h3', {}, 'SID'), h('span', { class: 'hint' }, 'tick to mute a voice')), this.els.sid);
+    this.els.sidRecBtn = btn('', { cls: 'small', onClick: () => void this.toggleSidRecord() });
+    this.els.sidRecInfo = h('span', { class: 'hint mono' });
+    this.els.wavBtn = btn('', { cls: 'small', onClick: () => void this.app.toggleWav() });
+    el.append(h('div', { class: 'panel-head' }, h('h3', {}, 'SID'), h('span', { class: 'hint' }, 'tick to mute a voice'),
+      h('span', { class: 'tb-spacer' }), this.els.sidRecInfo, this.els.wavBtn, this.els.sidRecBtn), this.els.sid);
     this.sidBuilt = false;
+    this.paintSidRecord();
+  }
+
+  // ---- Export SID: record the SID writes of whatever is playing, save a PSID that replays them
+  private sidRec: SidRecorder | null = null;
+  private sidRecTimer = 0;
+  private paintSidRecord(): void {
+    const b = this.els.sidRecBtn, info = this.els.sidRecInfo, wb = this.els.wavBtn;
+    if (!b) return;
+    const r = this.sidRec, w = this.app.wavRec;
+    wb.textContent = w ? '■ Stop & save .wav' : '● Record WAV';
+    wb.title = w ? 'Stop recording and save the audio as a .wav file' : 'Record the audio output (what you hear, filters and mutes included) to a 16-bit stereo .wav';
+    wb.classList.toggle('rec', !!w);
+    b.textContent = r ? '■ Stop & save .sid' : '● Export SID…';
+    b.title = r ? 'Stop recording and save the tune as a .sid file'
+      : 'Record the music that is playing now (start at the beginning of the tune, stop when it loops) and save it as a .sid that plays in VICE, sidplay and C64EMUL8R';
+    b.classList.toggle('rec', !!r);
+    info.textContent = [r ? `SID ${r.seconds.toFixed(1)} s · ${r.writes.length} writes` : '', w ? `WAV ${w.seconds.toFixed(1)} s` : ''].filter(Boolean).join(' · ');
+  }
+  /** keeps the recording counters moving while either recorder runs */
+  private recTick(): void {
+    clearInterval(this.sidRecTimer);
+    if (this.sidRec || this.app.wavRec) this.sidRecTimer = window.setInterval(() => { this.paintSidRecord(); if (!this.sidRec && !this.app.wavRec) clearInterval(this.sidRecTimer); }, 250);
+  }
+  private async toggleSidRecord(): Promise<void> {
+    const app = this.app, c = app.c64;
+    if (!this.sidRec) {
+      this.sidRec = new SidRecorder(c);
+      this.recTick();
+      if (!app.running) toast('Recording SID writes - resume the machine to record the music');
+      this.paintSidRecord();
+      return;
+    }
+    const rec = this.sidRec;
+    rec.stop();
+    this.sidRec = null;
+    this.paintSidRecord();
+    try {
+      const m = c.vic.model, frame = m.cyclesPerLine * m.lines;
+      const label = (app.sidInfo?.name || app.mediaLabel.replace(/^(Disk|Tape|Program|Cartridge|PRG|SID)\s+/i, '').replace(/\.[a-z0-9]{1,4}$/i, '') || 'Recorded tune').slice(0, 32);
+      const built = buildPsid(rec, frame, {
+        name: label, author: app.sidInfo?.author || '<?>',
+        released: `${new Date().getFullYear()} recorded with C64EMUL8R`.slice(0, 32),
+        ntsc: c.config.video !== 'PAL', model: c.sid.model === '8580' ? '8580' : '6581',
+      });
+      const file = label.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_') || 'tune';
+      const p = await window.host.saveFile(`${file}.sid`, built.psid, [{ name: 'SID tune', extensions: ['sid'] }]);
+      if (p) {
+        const speed = built.speed > 1 ? `${built.speed}x speed, ` : '';
+        toast(`Saved ${built.seconds.toFixed(1)} s of music (${speed}${(built.psid.length / 1024).toFixed(1)} KB)${built.truncated ? ' - cut short: the recording was too long to fit in C64 memory' : ''}`, built.truncated, 5000);
+      }
+    } catch (e: any) { toast(`Export SID failed: ${e?.message ?? e}`, true, 4000); }
   }
   private sidBuilt = false;
 

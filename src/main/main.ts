@@ -246,6 +246,7 @@ ipcMain.handle('dir:list', async (_e, p: string) => {
 ipcMain.handle('path:join', (_e, ...parts: string[]) => join(...parts));
 ipcMain.handle('path:dirname', (_e, p: string) => dirname(p));
 ipcMain.handle('app:home', () => app.getPath('home'));
+ipcMain.handle('app:userData', () => app.getPath('userData'));
 ipcMain.handle('app:args', () => cliArgs());
 
 // ---------------------------------------------------------------- settings

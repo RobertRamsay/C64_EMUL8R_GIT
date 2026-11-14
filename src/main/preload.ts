@@ -18,6 +18,8 @@ const api = {
   joinPath: (...parts: string[]) => ipcRenderer.invoke('path:join', ...parts),
   dirname: (p: string) => ipcRenderer.invoke('path:dirname', p),
   homeDir: () => ipcRenderer.invoke('app:home'),
+  /** the app's own data folder (settings, quick save) */
+  userDataDir: (): Promise<string> => ipcRenderer.invoke('app:userData'),
   args: () => ipcRenderer.invoke('app:args'),
   loadSettings: () => ipcRenderer.invoke('settings:load'),
   saveSettings: (s: unknown) => ipcRenderer.invoke('settings:save', s),

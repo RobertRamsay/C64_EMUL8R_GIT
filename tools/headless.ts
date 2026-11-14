@@ -8,6 +8,9 @@ import { C64 } from '../src/core/c64';
 import { D64 } from '../src/core/d64';
 import { attachMedia, parseSid, startSid } from '../src/core/loaders';
 import { BinaryMonitor } from '../src/core/binmon';
+import { SidRecorder, buildPsid, toTicks } from '../src/core/sidrecord';
+import { WavRecorder } from '../src/core/wav';
+import { decodeSprite, encodeSprite, getPixel, readSpd, readSpriteFile, setPixel, spritesToAsm, transformSprite, writeSpd } from '../src/core/sprites';
 
 const candidates = [
   process.env.C64_ROMS,
@@ -402,6 +405,120 @@ if (roms.dos1541) {
   const img = c.currentDiskImage();
   const names = img ? new D64(img).directory().map((e) => e.nameStr) : [];
   check('true drive SAVE (GCR write + decode)', names.includes('COPY'), names.join(',') + '\n' + screenText(c));
+}
+
+
+
+// ---- debugger: sprites as displayed, through a mid-frame VIC bank switch
+{
+  const c = machine(false);
+  runFrames(c, 120);
+  // wait line $30: bank 0, sprite Y 64 / wait line $90: bank 1, sprite Y 160 / loop
+  const code = [0x78, 0xa9, 0x30, 0xcd, 0x12, 0xd0, 0xd0, 0xfb, 0xa9, 0x03, 0x8d, 0x00, 0xdd, 0xa9, 0x40, 0x8d, 0x01, 0xd0,
+    0xa9, 0x90, 0xcd, 0x12, 0xd0, 0xd0, 0xfb, 0xa9, 0x02, 0x8d, 0x00, 0xdd, 0xa9, 0xa0, 0x8d, 0x01, 0xd0, 0x4c, 0x01, 0xc0];
+  c.ram.set(code, 0xc000);
+  c.ram[0x07f8] = 0x80; c.ram[0x47f8] = 0x81;
+  c.poke(0xd015, 1); c.poke(0xd000, 100); c.poke(0xd017, 1); c.poke(0xd027, 7);
+  c.cpu.pc = 0xc000;
+  runFrames(c, 3);
+  const seen = c.vic.spSeen.map((s) => `${s.n}:${s.addr.toString(16)}:${s.y}:${s.ye ? 'ye' : ''}`);
+  check('sprites as displayed across a bank split', seen.join(' ') === '0:2000:64:ye 0:6040:160:ye', seen.join(' '));
+}
+
+
+// ---- Export SID: record a playing tune, build a PSID, play that back, compare
+{
+  // synthetic tune: init sets volume (and a 2x CIA timer when asked), play changes freq/pulse/gate
+  const tune = (cia2x: boolean) => {
+    const init = [0xa9, 0x0f, 0x8d, 0x18, 0xd4, 0xa9, 0x00, 0x8d, 0x00, 0x11, 0xa9, 0x09, 0x8d, 0x05, 0xd4,
+      ...(cia2x ? [0xa9, 0x64, 0x8d, 0x04, 0xdc, 0xa9, 0x26, 0x8d, 0x05, 0xdc] : []), 0x60];
+    const play = [0xee, 0x00, 0x11, 0xad, 0x00, 0x11, 0x8d, 0x01, 0xd4, 0x0a, 0x8d, 0x02, 0xd4,
+      0x29, 0x08, 0x4a, 0x4a, 0x4a, 0x09, 0x40, 0x8d, 0x04, 0xd4, 0x60];
+    const body = [...init, ...new Array(0x40 - init.length).fill(0xea), ...play];
+    const h = new Uint8Array(0x7c + 2 + body.length);
+    const dv = new DataView(h.buffer);
+    h.set([0x50, 0x53, 0x49, 0x44]); dv.setUint16(4, 2); dv.setUint16(6, 0x7c);
+    dv.setUint16(0x0a, 0x1000); dv.setUint16(0x0c, 0x1040); dv.setUint16(0x0e, 1); dv.setUint16(0x10, 1);
+    dv.setUint32(0x12, cia2x ? 1 : 0); dv.setUint16(0x76, 0x14);
+    h[0x7c] = 0x00; h[0x7d] = 0x10; h.set(body, 0x7e);
+    return h;
+  };
+  const statesOf = (rec: SidRecorder, frame: number) => {
+    const st = rec.startRegs.slice();
+    return toTicks(rec.writes, frame).ticks.map((t) => { for (const w of t) st[w.r] = w.v; return Array.from(st).join(','); });
+  };
+  const record = (psid: Uint8Array, frames: number) => {
+    const c = machine(false);
+    runFrames(c, 100);
+    startSid(c, parseSid(psid), 0);
+    runFrames(c, 20);
+    const rec = new SidRecorder(c);
+    runFrames(c, frames);
+    rec.stop();
+    return { c, rec, frame: c.vic.model.cyclesPerLine * c.vic.model.lines };
+  };
+  for (const cia of [false, true]) {
+    const a = record(tune(cia), 150);
+    const built = buildPsid(a.rec, a.frame, { name: 'Test', author: 'C64EMUL8R', released: '2026', ntsc: false, model: '6581' });
+    check(`export SID detects ${cia ? '2x CIA' : '1x'} speed`, built.speed === (cia ? 2 : 1), `speed ${built.speed}`);
+    const b = record(built.psid, 150);
+    const sa = statesOf(a.rec, a.frame), sb = statesOf(b.rec, b.frame);
+    // B starts recording 20 frames into the replay, so A's states from tick ~20 on appear in B in order
+    const skip = 20 * built.speed;
+    const want = sa.slice(skip, skip + 100).join('|');
+    check(`export SID replays the same register states (${cia ? '2x' : '1x'})`, sb.join('|').includes(want), `a ${sa.length} ticks, b ${sb.length}; ${sa[1]} / ${sb[1]}`);
+  }
+}
+
+
+// ---- WAV export: header, samples, silence trimmed, real SID audio
+{
+  const w = new WavRecorder(44100);
+  w.add(new Float32Array(100), new Float32Array(100));                 // leading silence
+  w.add(Float32Array.from([0.5, -0.5, 1.2]), Float32Array.from([0.25, 0, -2]));
+  w.add(new Float32Array(50), new Float32Array(50));                    // trailing silence
+  const d = w.encode();
+  const dv = new DataView(d.buffer);
+  const txt = (o: number) => String.fromCharCode(...d.subarray(o, o + 4));
+  check('WAV header', txt(0) === 'RIFF' && txt(8) === 'WAVE' && txt(36) === 'data' && dv.getUint16(22, true) === 2 && dv.getUint32(24, true) === 44100 && dv.getUint16(34, true) === 16 && dv.getUint32(4, true) === d.length - 8);
+  const smp = Array.from({ length: (d.length - 44) / 2 }, (_v, i) => dv.getInt16(44 + i * 2, true));
+  check('WAV samples interleaved, clipped, silence trimmed', smp.join(',') === '16384,8192,-16383,0,32767,-32767', smp.join(','));
+  // real audio: a machine playing the synthetic tune produces a non-silent recording
+  const c = machine(false);
+  runFrames(c, 100);
+  c.poke(0xd418, 15); c.poke(0xd405, 0x09); c.poke(0xd406, 0xf0); c.poke(0xd401, 0x20); c.poke(0xd404, 0x21);
+  c.takeAudio();
+  const rec = new WavRecorder(c.config.sampleRate);
+  for (let i = 0; i < 25; i++) { runFrames(c, 1); const a = c.takeAudio(); rec.add(a.left, a.right); }
+  const wav = rec.encode(false), wv = new DataView(wav.buffer);
+  let peak = 0; for (let o = 44; o < wav.length; o += 2) peak = Math.max(peak, Math.abs(wv.getInt16(o, true)));
+  check('WAV records SID output', Math.abs(rec.seconds - 0.5) < 0.02 && peak > 1000, `${rec.seconds.toFixed(3)} s, peak ${peak}`);
+}
+
+// ---- sprite editor helpers (pure)
+{
+  const d = new Uint8Array(64);
+  setPixel(d, 0, 0, 2, false); setPixel(d, 23, 20, 2, false);
+  check('sprite hires set/get', d[0] === 0x80 && d[62] === 0x01 && getPixel(d, 23, 20, false) === 2 && getPixel(d, 1, 0, false) === 0);
+  const m = new Uint8Array(64);
+  setPixel(m, 0, 0, 1, true); setPixel(m, 3, 0, 3, true); setPixel(m, 22, 1, 2, true);
+  check('sprite multicolour set/get', m[0] === 0x70 && m[5] === 0x02 && getPixel(m, 2, 0, true) === 3 && getPixel(m, 23, 1, true) === 2, [...m.subarray(0, 6)].join(','));
+  check('sprite decode/encode round trip', encodeSprite(decodeSprite(m, true), true).subarray(0, 63).every((v, i) => v === m[i]));
+  const f = d.slice(); transformSprite(f, 'flipH', false);
+  check('sprite flip H', f[2] === 0x01 && f[60] === 0x80, [...f].join(','));
+  const mf = m.slice(); transformSprite(mf, 'flipH', true);
+  check('sprite flip H multicolour keeps pairs', getPixel(mf, 22, 0, true) === 1 && getPixel(mf, 20, 0, true) === 3 && getPixel(mf, 0, 1, true) === 2);
+  const sh = d.slice(); transformSprite(sh, 'right', false);
+  check('sprite shift right wraps', sh[0] === 0x40 && getPixel(sh, 0, 20, false) === 2);
+  const spd = writeSpd({ sprites: [{ data: d, mc: false, colour: 7 }, { data: m, mc: true, colour: 2 }], bg: 6, mc1: 11, mc2: 15 });
+  const back = readSpd(spd);
+  check('SpritePad write/read', back.sprites.length === 2 && back.bg === 6 && back.mc1 === 11 && back.mc2 === 15 && back.sprites[1].mc && back.sprites[1].colour === 2 && !back.sprites[0].mc && back.sprites[0].colour === 7 && back.sprites[1].data[0] === 0x70);
+  const prg = new Uint8Array(2 + 128); prg[0] = 0x00; prg[1] = 0x20; prg[2] = 0xaa;
+  const rf = readSpriteFile('x.prg', prg);
+  check('sprite PRG import strips load address', rf.loadAddr === 0x2000 && rf.sprites.length === 2 && rf.sprites[0][0] === 0xaa);
+  const asm = spritesToAsm([m], 0x2000, true, 'acme');
+  check('sprite ACME source', asm.includes('!byte $70, $00, $00') && asm.includes('sprite_0:') && asm.includes('pointer $80'), asm.slice(0, 300));
+  check('sprite KickAss source', spritesToAsm([d], 0x3000, false, 'kick').includes('.byte $80, $00, $00  // #.......'));
 }
 
 if (process.argv.includes('--dump')) writeFileSync('screen.txt', '');

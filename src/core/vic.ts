@@ -8,6 +8,15 @@ export interface VicMemory {
   /** 14-bit VIC address read (bank and char ROM mapping done by the machine). */
   vicRead(addr: number): number;
   colorRam: Uint8Array;
+  /** debugger: absolute RAM address the VIC sees at 14-bit addr, or -1 for char ROM */
+  vicAbs?(addr: number): number;
+}
+
+/** One sprite as the VIC actually displayed it (debugger), with the registers of that moment. */
+export interface SpriteSeen {
+  /** absolute RAM address of the data, or the 14-bit VIC address when rom is set */
+  n: number; addr: number; rom: boolean; ptr: number; x: number; y: number;
+  mc: boolean; col: number; mc1: number; mc2: number; xe: boolean; ye: boolean; behind: boolean;
 }
 
 export interface VicModel {
@@ -73,6 +82,10 @@ export class VICII {
   private spLineMask = 0;
   private spPos = new Int16Array(8);   // pixels shifted out; -1 waiting for X, -2 finished
   private spPtr = new Uint8Array(8);
+  /** sprites displayed during the last complete frame, in order (debugger) */
+  spSeen: SpriteSeen[] = [];
+  private spSeenCur: SpriteSeen[] = [];
+  private spSeenLine = new Int16Array(8).fill(-9);
   spSpriteColl = 0;
   spBgColl = 0;
   // border
@@ -340,6 +353,8 @@ export class VICII {
         this.vcBase = 0;
         this.frame++;
         this.frameReady = true;
+        this.spSeen = this.spSeenCur;
+        this.spSeenCur = [];
       }
     } else {
       this.cycle = c + 1;
@@ -352,6 +367,17 @@ export class VICII {
     this.spPtr[i] = ptr;
     if (this.spDma[i]) {
       const base = ptr << 6;
+      // first line of a sprite (a y-expanded sprite fetches line 0 twice)
+      if (this.spMc[i] === 0 && this.spSeenLine[i] !== this.raster - 1 && this.spSeenCur.length < 128) {
+        const r = this.regs, b = 1 << i;
+        const abs = this.mem.vicAbs ? this.mem.vicAbs(base) : base;
+        this.spSeenCur.push({
+          n: i, addr: abs < 0 ? base : abs, rom: abs < 0, ptr, x: this.spX[i], y: this.spY[i],
+          mc: !!(r[0x1c] & b), col: r[0x27 + i] & 15, mc1: r[0x25] & 15, mc2: r[0x26] & 15,
+          xe: !!(r[0x1d] & b), ye: !!(r[0x17] & b), behind: !!(r[0x1b] & b),
+        });
+      }
+      if (this.spMc[i] === 0) this.spSeenLine[i] = this.raster;
       for (let k = 0; k < 3; k++) {
         this.spData[i * 3 + k] = this.mem.vicRead(base | this.spMc[i]);
         this.spMc[i] = (this.spMc[i] + 1) & 0x3f;
