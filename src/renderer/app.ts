@@ -14,7 +14,7 @@ import { AudioOut } from './audio';
 import { Video } from './video';
 import { InputManager, DEVICE_NAMES } from './input';
 import { Settings, loadSettings, saveSettings, TURBO_SPEEDS } from './settings';
-import { btn, dropdown, h, icon, menuItem, toast, clear, hex4 } from './ui/dom';
+import { btn, dropdown, h, icon, installTooltips, menuItem, toast, clear, hex4 } from './ui/dom';
 import { openSettings } from './ui/settingsDialog';
 import { DebuggerUI } from './ui/debugger';
 import { UltimateMenu } from './ui/ultimate';
@@ -1054,6 +1054,7 @@ function btnIcon(name: string): SVGSVGElement {
 
 export { MEDIA_EXTENSIONS };
 
+installTooltips();
 const app = new App();
 (window as any).app = app;
 app.start().catch((e) => { console.error(e); toast('Startup failed: ' + e.message, true, 10000); });

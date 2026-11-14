@@ -105,5 +105,74 @@ export function menuItem(label: string, onClick: () => void, kbd = '', iconName?
   return b;
 }
 
+// ------------------------------------------------------------ tooltips
+// Help text for anything with a title: shown just under the pointer after it
+// rests on the element for TIP_DELAY ms. title attributes are moved to
+// data-tip as they appear (so the browser's own tooltip never shows), and
+// icon-only buttons keep the text as their accessible name.
+export const TIP_DELAY = 600;
+
+export function installTooltips(): void {
+  const tip = h('div', { class: 'tip', role: 'tooltip' });
+  document.body.append(tip);
+  let current: HTMLElement | null = null;
+  let suppressed: HTMLElement | null = null;
+  let timer = 0, x = 0, y = 0;
+
+  const adopt = (el: Element) => {
+    const t = el.getAttribute('title');
+    if (t === null || el instanceof SVGElement) return;
+    el.removeAttribute('title');
+    if (!t) { delete (el as HTMLElement).dataset.tip; return; }
+    (el as HTMLElement).dataset.tip = t;
+    if (!el.getAttribute('aria-label') && !(el.textContent ?? '').trim()) el.setAttribute('aria-label', t);
+    if (el === current && tip.classList.contains('show')) tip.textContent = t;
+  };
+  document.querySelectorAll('[title]').forEach(adopt);
+  new MutationObserver((list) => {
+    for (const m of list) {
+      if (m.type === 'attributes') adopt(m.target as Element);
+      else m.addedNodes.forEach((n) => { if (n instanceof Element) { adopt(n); n.querySelectorAll('[title]').forEach(adopt); } });
+    }
+  }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['title'] });
+
+  const hide = () => { clearTimeout(timer); tip.classList.remove('show'); };
+  const show = () => {
+    const text = current?.dataset.tip;
+    if (!current || !current.isConnected || !text) return;
+    tip.textContent = text;
+    tip.style.left = '0px'; tip.style.top = '0px';
+    tip.classList.add('show');
+    const w = tip.offsetWidth, ht = tip.offsetHeight;
+    let left = x - 8, top = y + 22;
+    if (left + w > innerWidth - 8) left = innerWidth - w - 8;
+    if (top + ht > innerHeight - 8) top = y - ht - 10;
+    tip.style.left = `${Math.max(8, left)}px`;
+    tip.style.top = `${Math.max(8, top)}px`;
+  };
+  document.addEventListener('pointerover', (e) => {
+    const el = (e.target as Element).closest?.('[data-tip]') as HTMLElement | null;
+    if (el === current) return;
+    hide();
+    current = el;
+    if (el && el !== suppressed) { suppressed = null; timer = window.setTimeout(show, TIP_DELAY); }
+  }, true);
+  document.addEventListener('pointerout', (e) => {
+    if (!current) return;
+    const to = e.relatedTarget as Node | null;
+    if (to && current.contains(to)) return;
+    hide();
+    if (suppressed === current) suppressed = null;
+    current = null;
+  }, true);
+  document.addEventListener('pointermove', (e) => { x = e.clientX; y = e.clientY; }, true);
+  // clicking or typing dismisses it until the pointer leaves the element
+  const dismiss = () => { hide(); suppressed = current; };
+  document.addEventListener('pointerdown', dismiss, true);
+  document.addEventListener('keydown', dismiss, true);
+  document.addEventListener('wheel', dismiss, { capture: true, passive: true });
+  window.addEventListener('blur', hide);
+}
+
 export const hex2 = (v: number) => v.toString(16).toUpperCase().padStart(2, '0');
 export const hex4 = (v: number) => v.toString(16).toUpperCase().padStart(4, '0');
