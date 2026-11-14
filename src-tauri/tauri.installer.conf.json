@@ -1,0 +1,17 @@
+{
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "Polytricity",
+    "copyright": "Copyright (c) 2026 Robert Ramsay",
+    "shortDescription": "Cycle-exact Commodore 64 emulator with C64 Ultimate features and a debugger",
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "../build/icon.ico",
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

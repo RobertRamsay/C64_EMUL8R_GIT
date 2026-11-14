@@ -21,6 +21,7 @@
     "bundle:devmachine-mac-tauri": "npm run package:mac-tauri && node tools/bundle-devmachine-mac.mjs --tauri",
     "tauri:build": "node tools/tauri.mjs build --no-bundle",
     "tauri:dev": "node tools/tauri.mjs dev",
+    "tauri:installer": "node tools/tauri.mjs build --config src-tauri/tauri.installer.conf.json",
     "bundle:devmachine-tauri": "npm run tauri:build && node tools/bundle-devmachine.mjs --tauri"
   },
   "devDependencies": {
