@@ -54,6 +54,7 @@ export class App {
   private pauseBtn!: HTMLButtonElement;
   private warpBtn!: HTMLButtonElement;
   private sprBtn!: HTMLButtonElement;
+  private keysBtn!: HTMLButtonElement;
   private dbgBtn!: HTMLButtonElement;
   private speedBtn!: HTMLButtonElement;
   /** the file last autostarted: REBOOT loads it again */
@@ -249,11 +250,15 @@ export class App {
     main.append(h('span', { class: 'tb-sep' }));
     main.append(btn('Ultimate', { icon: 'ultimate', title: 'Ultimate menu / file browser (Ctrl+U)', onClick: () => this.ultimate.toggle() }));
 
+    this.keysBtn = btn('', { icon: 'joystick', onClick: () => this.setKeyJoystickOff(!this.input.keysetsOff) });
+    right.append(this.keysBtn);
+    this.paintKeysBtn();
     const joy = btn('Input', { icon: 'joystick', title: 'Joysticks & keyboard setup' });
     right.append(joy);
     dropdown(joy, () => [
       menuItem('Input setup…', () => openSettings(this, 'input'), '', 'joystick'),
       menuItem('Swap joystick ports', () => this.swapPorts(), 'Ctrl+J', 'swap'),
+      menuItem(this.input.keysetsOff ? 'Keyboard joystick back on' : 'Keyboard joystick off (type freely)', () => this.setKeyJoystickOff(!this.input.keysetsOff), 'Ctrl+K', this.input.keysetsOff ? 'joystick' : 'joystickoff'),
       h('hr'),
       h('div', { class: 'menu-title' }, `Port 1: ${this.portLabel(1)}`),
       h('div', { class: 'menu-title' }, `Port 2: ${this.portLabel(2)}`),
@@ -266,7 +271,25 @@ export class App {
 
   portLabel(p: 1 | 2): string {
     const d = this.settings.input.ports[p];
-    return d.length ? d.map((x) => DEVICE_NAMES[x] ?? x).join(' + ') : 'none';
+    const off = this.input?.keysetsOff;
+    return d.length ? d.map((x) => (DEVICE_NAMES[x] ?? x) + (off && x.startsWith('keyset') ? ' (off)' : '')).join(' + ') : 'none';
+  }
+
+  /** Temporarily stop keyboard keysets steering the joystick, so every key types into the C64. */
+  setKeyJoystickOff(off: boolean): void {
+    this.input.setKeysetsOff(off);
+    this.paintKeysBtn();
+    this.updateStatus();
+    toast(off ? 'Keyboard joystick off: all keys type into the C64 (Ctrl+K to turn it back on)'
+      : this.input.keysetInUse ? 'Keyboard joystick on' : 'Keyboard joystick on (no keyset is plugged into a port right now)', false, 2600);
+  }
+  private paintKeysBtn(): void {
+    const b = this.keysBtn, off = !!this.input?.keysetsOff;
+    if (!b) return;
+    b.classList.toggle('on', off);
+    b.title = off ? 'Keyboard joystick is off: every key types into the C64. Click to turn it back on (Ctrl+K)'
+      : 'Keyboard joystick on: keyset keys (like W A S D) steer the joystick. Click to turn it off so you can type (Ctrl+K)';
+    b.querySelector('svg')?.replaceWith(icon(off ? 'joystickoff' : 'joystick'));
   }
 
   // ---------------------------------------------------------------- events
@@ -322,6 +345,7 @@ export class App {
       else if (ctrl && e.code === 'Digit1') this.setTurbo(1);
       else if (ctrl && e.code === 'KeyW') this.setWarp(!this.warp);
       else if (ctrl && e.code === 'KeyJ') this.swapPorts();
+      else if (ctrl && e.code === 'KeyK') this.setKeyJoystickOff(!this.input.keysetsOff);
       else if (ctrl && e.code === 'KeyU') this.ultimate.toggle();
       else if (ctrl && e.code === 'KeyS') this.quickSave();
       else if (ctrl && e.code === 'KeyL') void this.quickLoad();

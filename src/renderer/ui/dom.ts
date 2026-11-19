@@ -30,6 +30,7 @@ const ICONS: Record<string, string> = {
   debug: '<rect x="7" y="7" width="10" height="13" rx="5"/><path d="M12 7V4M4 11h3M17 11h3M4 17h3M17 17h3M9 4l1.5 2M15 4l-1.5 2"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>',
   joystick: '<path d="M12 4v9"/><circle cx="12" cy="4" r="2"/><rect x="5" y="13" width="14" height="7" rx="2"/><path d="M8 13v-1"/>',
+  joystickoff: '<path d="M12 4v9"/><circle cx="12" cy="4" r="2"/><rect x="5" y="13" width="14" height="7" rx="2"/><path d="M8 13v-1"/><path d="M3 3l18 18"/>',
   disk: '<rect x="4" y="3" width="16" height="18" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M8 6h3"/>',
   ultimate: '<path d="M12 3l9 9-9 9-9-9z"/><path d="M12 8l4 4-4 4-4-4z"/>',
   camera: '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',

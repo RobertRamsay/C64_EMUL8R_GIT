@@ -20,6 +20,8 @@ export class InputManager {
   autofireDev = new Set<DeviceId>();
   private frame = 0;
   enabled = true;
+  /** temporarily ignore keyset joysticks, so their keys type into the C64 again (not saved) */
+  keysetsOff = false;
 
   constructor(private c64: C64, public settings: Settings) {}
 
@@ -27,6 +29,7 @@ export class InputManager {
   private gpKeysDown = new Set<string>();
 
   private keysetFor(code: string): { dev: DeviceId; dir: JoyDir } | null {
+    if (this.keysetsOff) return null;
     const ports = this.settings.input.ports;
     const active = new Set([...ports[1], ...ports[2]]);
     for (const id of ['A', 'B'] as const) {
@@ -84,6 +87,20 @@ export class InputManager {
       const js = this.keysetFor(code);
       if (js) this.devState.set(js.dev, (this.devState.get(js.dev) ?? 0) | BIT[js.dir]);
     }
+  }
+
+  /** Turn keyboard joysticks off/on; directions held at that moment are released. */
+  setKeysetsOff(off: boolean): void {
+    if (off === this.keysetsOff) return;
+    for (const [code, m] of this.down) if (m === 'joy') this.down.delete(code);
+    for (const id of ['A', 'B'] as const) this.devState.set('keyset' + id, 0);
+    this.keysetsOff = off;
+  }
+
+  /** Is a keyboard keyset plugged into either port? */
+  get keysetInUse(): boolean {
+    const p = this.settings.input.ports;
+    return [...p[1], ...p[2]].some((d) => d.startsWith('keyset'));
   }
 
   releaseAll(): void {
