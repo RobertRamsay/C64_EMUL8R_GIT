@@ -5,6 +5,11 @@
     "publisher": "Polytricity",
     "copyright": "Copyright (c) 2026 Robert Ramsay",
     "shortDescription": "Cycle-exact Commodore 64 emulator with C64 Ultimate features and a debugger",
+    "fileAssociations": [
+      { "ext": ["prg"], "name": "C64EMUL8R.prg", "description": "C64 program", "role": "Viewer" },
+      { "ext": ["d64"], "name": "C64EMUL8R.d64", "description": "C64 disk image", "role": "Viewer" },
+      { "ext": ["sid"], "name": "C64EMUL8R.sid", "description": "C64 SID tune", "role": "Viewer" }
+    ],
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
       "nsis": {
