@@ -179,6 +179,47 @@ export class App {
 
   persist(): void { saveSettings(this.settings); }
 
+  // Drag the bottom debugger panel's top edge to trade screen space for panel space.
+  private static readonly MIN_SCREEN = 160;
+  private static readonly MIN_PANEL = 90;
+  private setBottomHeight(px: number): void {
+    const app = document.getElementById('app')!;
+    if (!px) { app.style.removeProperty('--dbg-bottom'); return; }
+    const ws = document.getElementById('workspace')!.getBoundingClientRect();
+    const h = Math.round(Math.max(App.MIN_PANEL, Math.min(ws.height - App.MIN_SCREEN, px)));
+    app.style.setProperty('--dbg-bottom', `${h}px`);
+  }
+  private setupBottomSplitter(): void {
+    const bottom = document.getElementById('dbg-bottom')!;
+    const grip = h('div', { class: 'hsplit', title: 'Drag to resize the screen and the debugger panel (double-click: default size)' });
+    bottom.append(grip);
+    if (this.settings.ui.dbgBottom) requestAnimationFrame(() => this.setBottomHeight(this.settings.ui.dbgBottom));
+    grip.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      try { grip.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
+      grip.classList.add('drag');
+      document.body.classList.add('row-resizing');
+      const ws = document.getElementById('workspace')!;
+      const move = (ev: PointerEvent) => this.setBottomHeight(ws.getBoundingClientRect().bottom - ev.clientY);
+      const up = () => {
+        grip.removeEventListener('pointermove', move);
+        grip.removeEventListener('pointerup', up);
+        grip.removeEventListener('pointercancel', up);
+        grip.classList.remove('drag');
+        document.body.classList.remove('row-resizing');
+        this.settings.ui.dbgBottom = Math.round(bottom.getBoundingClientRect().height);
+        this.persist();
+      };
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
+      grip.addEventListener('pointercancel', up);
+    });
+    grip.addEventListener('dblclick', () => { this.settings.ui.dbgBottom = 0; this.setBottomHeight(0); this.persist(); });
+    // keep a saved height inside the window when it gets smaller
+    window.addEventListener('resize', () => { if (this.settings.ui.dbgBottom) this.setBottomHeight(this.settings.ui.dbgBottom); });
+  }
+
   // ------------------------------------------------------------- toolbar
   private buildToolbar(): void {
     const main = document.getElementById('tb-main')!;
@@ -295,6 +336,7 @@ export class App {
   // ---------------------------------------------------------------- events
   private bindEvents(): void {
     const wrap = document.getElementById('screen-wrap')!;
+    this.setupBottomSplitter();
     window.addEventListener('resize', () => this.video.layout());
     new ResizeObserver(() => this.video.layout()).observe(document.getElementById('screen-pane')!);
     window.addEventListener('keydown', (e) => this.onKey(e, true));
