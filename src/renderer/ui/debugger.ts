@@ -842,6 +842,7 @@ export class DebuggerUI {
     if (!d.enabled) html += `<p class="muted">True drive emulation is off — the fast virtual drive is active${c.vdisk ? ` with "${esc(c.vdisk.diskName)}"` : ''}.</p>`;
     else {
       const p = cpu.p;
+      d.syncVias(); // the VIA timers are advanced lazily
       html += `<table class="kv">
         <tr><th>Disk</th><td>${d.disk ? esc(d.diskName) : '— empty —'} ${d.disk?.dirty ? '<b style="color:var(--warn)">modified</b>' : ''}</td></tr>
         <tr><th>Head</th><td>track ${Math.floor(d.track)}${d.halfTrack & 1 ? '.5' : ''} (halftrack ${d.halfTrack}) · motor ${d.motor ? 'ON' : 'off'} · LED ${d.led ? '<b style="color:var(--err)">ON</b>' : 'off'}</td></tr>

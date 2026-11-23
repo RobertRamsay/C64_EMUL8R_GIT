@@ -1315,10 +1315,17 @@ export class App {
         this.acc -= n;
         if (n > 4) { n = 4; this.acc = 0; }
         for (let i = 0; i < n; i++) if (this.runOneFrame(true)) break;
+        // on displays faster than 50 Hz some refreshes have no new C64 frame: nothing to draw
+        if (!n) { this.emuMs += performance.now() - t0; return this.afterTick(now); }
       }
       this.video.draw(this.c64.vic.framebuffer);
       this.emuMs += performance.now() - t0;
     }
+    this.afterTick(now);
+  };
+
+  /** Speed readout, status bar and debugger updates of each display refresh. */
+  private afterTick(now: number): void {
     if (now - this.speedTime > 1000) {
       this.speedPct = Math.round((this.speedFrames / ((now - this.speedTime) / 1000)) / this.c64.fps * 100);
       if (this.speedFrames) this.msPerFrame = this.emuMs / this.speedFrames;
@@ -1328,7 +1335,7 @@ export class App {
     if (now - this.lastStatus > 200) { this.lastStatus = now; this.updateStatus(); }
     if (this.settings.ui.debugger && this.running && now - this.lastUi > 100) { this.lastUi = now; this.debugger.refresh(false); }
     if (this.ultimate.isOpen) this.ultimate.render();
-  };
+  }
 
   // ------------------------------------------------------------ status bar
   updatePauseUi(): void {

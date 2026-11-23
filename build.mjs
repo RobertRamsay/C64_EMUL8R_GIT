@@ -30,4 +30,11 @@ if (watch) {
   for (const b of builds) (await esbuild.context(b)).watch();
 } else {
   await Promise.all(builds.map((b) => esbuild.build(b)));
+  // For the older browser targets esbuild turns class fields into __publicField(this, "x", v)
+  // calls unless tsconfig has "useDefineForClassFields": false. Objects with many fields
+  // made that way end up in V8's slow dictionary mode: the whole emulator ran 4-5x slower.
+  if (readFileSync('dist/renderer/app.js', 'utf8').includes('__publicField(')) {
+    console.error('dist/renderer/app.js defines class fields with __publicField: set "useDefineForClassFields": false in tsconfig.json');
+    process.exit(1);
+  }
 }

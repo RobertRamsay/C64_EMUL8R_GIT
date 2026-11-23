@@ -49,6 +49,45 @@ export class VIA6522 {
     this.ca1 = level;
   }
 
+  /**
+   * Advance the timers by n cycles in one go, the same as n calls of clock(). The
+   * drive calls this when a register is accessed, and at the cycle of every timer
+   * flag (see eventIn), so flags and interrupts still happen on their exact cycle.
+   */
+  advance(n: number): void {
+    if (n <= 0) return;
+    // timer 1
+    let left = n;
+    if (this.t1Reload) { this.t1Reload = false; this.t1c = this.t1l; left--; }
+    while (left > 0) {
+      const d = this.t1c + 1; // decrements until it passes 0 to $FFFF
+      if (d > left) { this.t1c -= left; break; }
+      left -= d;
+      this.t1c = 0xffff;
+      if (this.acr & 0x40) { // free running: reload in the next cycle
+        this.setFlag(0x40);
+        if (left === 0) { this.t1Reload = true; break; }
+        this.t1c = this.t1l; left--;
+      } else if (this.t1Armed) {
+        this.setFlag(0x40);
+        this.t1Armed = false;
+      }
+    }
+    // timer 2 (one-shot only; pulse counting unsupported)
+    if (!(this.acr & 0x20)) {
+      if (this.t2Armed && this.t2c + 1 <= n) { this.setFlag(0x20); this.t2Armed = false; }
+      this.t2c = (this.t2c - n) & 0xffff;
+    }
+  }
+
+  /** Cycles from now until a timer sets its interrupt flag (Infinity: none will). */
+  eventIn(): number {
+    let e = Infinity;
+    if (this.acr & 0x40 || this.t1Armed) e = this.t1Reload ? this.t1l + 2 : this.t1c + 1;
+    if (!(this.acr & 0x20) && this.t2Armed && this.t2c + 1 < e) e = this.t2c + 1;
+    return e;
+  }
+
   clock(): void {
     // timer 1
     if (this.t1Reload) { this.t1Reload = false; this.t1c = this.t1l; }

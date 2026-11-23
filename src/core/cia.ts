@@ -8,20 +8,20 @@ export interface CiaPorts {
   writeB?(out: number): void;
 }
 
-const TA = 0, TB = 1;
-
 export class CIA6526 {
   pra = 0; prb = 0; ddra = 0; ddrb = 0;
-  latch = [0xffff, 0xffff];
-  counter = [0xffff, 0xffff];
+  // timers A and B in plain fields (clock() runs every cycle for both CIAs)
+  latchA = 0xffff; latchB = 0xffff;
+  counterA = 0xffff; counterB = 0xffff;
   cra = 0; crb = 0;
   icrData = 0;   // interrupt flags
   icrMask = 0;
   irqOut = false;
   private irqDelay = 0;
-  // timer pipelines: bit0 = counts this cycle, bit1 = counts next cycle ...
-  private startDelay = [0, 0];
-  private loadDelay = [0, 0];
+  /** the counter loads from the latch in the next cycle */
+  private loadA = 0; private loadB = 0;
+  /** cycles before a timer that was just started counts */
+  private startA = 0; private startB = 0;
   sdr = 0;
   private sdrBits = 0;
   private sdrPending = false;
@@ -37,11 +37,15 @@ export class CIA6526 {
 
   constructor(public name: string, public ports: CiaPorts) {}
 
+  /** [timer A, timer B] (debugger) */
+  get counter(): number[] { return [this.counterA, this.counterB]; }
+  get latch(): number[] { return [this.latchA, this.latchB]; }
+
   reset(): void {
     this.pra = this.prb = this.ddra = this.ddrb = 0;
-    this.latch = [0xffff, 0xffff]; this.counter = [0xffff, 0xffff];
+    this.latchA = this.latchB = this.counterA = this.counterB = 0xffff;
     this.cra = this.crb = 0; this.icrData = this.icrMask = 0;
-    this.startDelay = [0, 0]; this.loadDelay = [0, 0];
+    this.startA = this.startB = this.loadA = this.loadB = 0;
     this.irqDelay = 0;
     this.setIrq(false);
     this.tod = [0, 0, 0, 1]; this.todAlarm = [0, 0, 0, 0]; this.todLatch = null; this.todStopped = false;
@@ -61,50 +65,40 @@ export class CIA6526 {
   /** FLAG pin (negative edge): tape read / serial SRQ. */
   flag(): void { this.trigger(0x10); }
 
-  private timerCtrl(t: number): number { return t === TA ? this.cra : this.crb; }
-
   /** Advance one phi2 cycle. */
   clock(): void {
     if (this.irqDelay) {
       if (--this.irqDelay === 0) this.setIrq(true);
     }
     let underA = false;
-    for (let t = 0; t < 2; t++) {
-      const cr = this.timerCtrl(t);
-      if (this.loadDelay[t]) {
-        this.loadDelay[t] = 0;
-        this.counter[t] = this.latch[t];
-        continue;
-      }
-      if (this.startDelay[t]) {
-        this.startDelay[t]--;
-        continue;
-      }
-      if (!(cr & 1)) continue;
-      let counts: boolean;
-      if (t === TA) counts = !(cr & 0x20); // phi2 mode (CNT mode never clocks)
-      else {
-        const mode = (cr >> 5) & 3;
-        counts = mode === 0 || ((mode === 2 || mode === 3) && underA);
-      }
-      if (!counts) continue;
-      if (this.counter[t] === 0) {
+    // timer A: counts phi2 when running (CNT mode never clocks)
+    if (this.loadA) { this.loadA = 0; this.counterA = this.latchA; }
+    else if (this.startA) this.startA--;
+    else if ((this.cra & 0x21) === 0x01) {
+      if (this.counterA === 0) {
         // underflow
-        this.counter[t] = this.latch[t];
-        this.trigger(t === TA ? 0x01 : 0x02);
-        if (cr & 0x08) { // one-shot
-          if (t === TA) this.cra &= 0xfe; else this.crb &= 0xfe;
+        this.counterA = this.latchA;
+        this.trigger(0x01);
+        if (this.cra & 0x08) this.cra &= 0xfe; // one-shot
+        underA = true;
+        // serial port output mode shifts on timer A underflow
+        if (this.cra & 0x40 && this.sdrPending) {
+          this.sdrBits++;
+          if (this.sdrBits >= 16) { this.sdrBits = 0; this.sdrPending = false; this.trigger(0x08); }
         }
-        if (t === TA) {
-          underA = true;
-          // serial port output mode shifts on timer A underflow
-          if (this.cra & 0x40 && this.sdrPending) {
-            this.sdrBits++;
-            if (this.sdrBits >= 16) { this.sdrBits = 0; this.sdrPending = false; this.trigger(0x08); }
-          }
-        }
-      } else {
-        this.counter[t]--;
+      } else this.counterA--;
+    }
+    // timer B: phi2 (mode 0) or timer A underflows (modes 2, 3)
+    if (this.loadB) { this.loadB = 0; this.counterB = this.latchB; }
+    else if (this.startB) this.startB--;
+    else if (this.crb & 1) {
+      const mode = this.crb & 0x60;
+      if (mode === 0 || (mode >= 0x40 && underA)) {
+        if (this.counterB === 0) {
+          this.counterB = this.latchB;
+          this.trigger(0x02);
+          if (this.crb & 0x08) this.crb &= 0xfe;
+        } else this.counterB--;
       }
     }
     // TOD
@@ -152,10 +146,10 @@ export class CIA6526 {
       }
       case 0x2: return this.ddra;
       case 0x3: return this.ddrb;
-      case 0x4: return this.counter[TA] & 0xff;
-      case 0x5: return this.counter[TA] >> 8;
-      case 0x6: return this.counter[TB] & 0xff;
-      case 0x7: return this.counter[TB] >> 8;
+      case 0x4: return this.counterA & 0xff;
+      case 0x5: return this.counterA >> 8;
+      case 0x6: return this.counterB & 0xff;
+      case 0x7: return this.counterB >> 8;
       case 0x8: {
         const src = this.todLatch ?? this.tod;
         const v = src[0];
@@ -199,15 +193,15 @@ export class CIA6526 {
       case 0x1: this.prb = v; this.ports.writeB?.(this.portBOut()); break;
       case 0x2: this.ddra = v; this.ports.writeA?.(this.portAOut()); break;
       case 0x3: this.ddrb = v; this.ports.writeB?.(this.portBOut()); break;
-      case 0x4: this.latch[TA] = (this.latch[TA] & 0xff00) | v; break;
+      case 0x4: this.latchA = (this.latchA & 0xff00) | v; break;
       case 0x5:
-        this.latch[TA] = (this.latch[TA] & 0xff) | (v << 8);
-        if (!(this.cra & 1)) this.loadDelay[TA] = 1;
+        this.latchA = (this.latchA & 0xff) | (v << 8);
+        if (!(this.cra & 1)) this.loadA = 1;
         break;
-      case 0x6: this.latch[TB] = (this.latch[TB] & 0xff00) | v; break;
+      case 0x6: this.latchB = (this.latchB & 0xff00) | v; break;
       case 0x7:
-        this.latch[TB] = (this.latch[TB] & 0xff) | (v << 8);
-        if (!(this.crb & 1)) this.loadDelay[TB] = 1;
+        this.latchB = (this.latchB & 0xff) | (v << 8);
+        if (!(this.crb & 1)) this.loadB = 1;
         break;
       case 0x8: case 0x9: case 0xa: case 0xb: {
         const i = (reg & 0x0f) - 8;
@@ -230,16 +224,16 @@ export class CIA6526 {
         break;
       case 0xe: {
         const wasRunning = this.cra & 1;
-        if (v & 0x10) this.loadDelay[TA] = 1;
-        if (v & 1 && !wasRunning) this.startDelay[TA] = 1;
+        if (v & 0x10) this.loadA = 1;
+        if (v & 1 && !wasRunning) this.startA = 1;
         this.cra = v & 0xef;
         this.todPeriodHz50 = !!(v & 0x80);
         break;
       }
       case 0xf: {
         const wasRunning = this.crb & 1;
-        if (v & 0x10) this.loadDelay[TB] = 1;
-        if (v & 1 && !wasRunning) this.startDelay[TB] = 1;
+        if (v & 0x10) this.loadB = 1;
+        if (v & 1 && !wasRunning) this.startB = 1;
         this.crb = v & 0xef;
         break;
       }
@@ -249,14 +243,20 @@ export class CIA6526 {
 
   saveState(): any {
     return {
-      pra: this.pra, prb: this.prb, ddra: this.ddra, ddrb: this.ddrb, latch: this.latch.slice(), counter: this.counter.slice(),
+      pra: this.pra, prb: this.prb, ddra: this.ddra, ddrb: this.ddrb, latch: this.latch, counter: this.counter,
       cra: this.cra, crb: this.crb, icrData: this.icrData, icrMask: this.icrMask, irqOut: this.irqOut, irqDelay: this.irqDelay,
-      startDelay: this.startDelay.slice(), loadDelay: this.loadDelay.slice(), sdr: this.sdr, tod: this.tod.slice(), todAlarm: this.todAlarm.slice(),
+      startDelay: [this.startA, this.startB], loadDelay: [this.loadA, this.loadB], sdr: this.sdr, tod: this.tod.slice(), todAlarm: this.todAlarm.slice(),
       todStopped: this.todStopped, todCycles: this.todCycles,
     };
   }
   loadState(s: any): void {
-    Object.assign(this, { ...s, latch: s.latch.slice(), counter: s.counter.slice(), startDelay: s.startDelay.slice(), loadDelay: s.loadDelay.slice(), tod: s.tod.slice(), todAlarm: s.todAlarm.slice(), todLatch: null });
+    this.pra = s.pra; this.prb = s.prb; this.ddra = s.ddra; this.ddrb = s.ddrb;
+    [this.latchA, this.latchB] = s.latch; [this.counterA, this.counterB] = s.counter;
+    this.cra = s.cra; this.crb = s.crb; this.icrData = s.icrData; this.icrMask = s.icrMask;
+    this.irqOut = s.irqOut; this.irqDelay = s.irqDelay ?? 0;
+    [this.startA, this.startB] = s.startDelay; [this.loadA, this.loadB] = s.loadDelay;
+    this.sdr = s.sdr; this.tod = s.tod.slice(); this.todAlarm = s.todAlarm.slice(); this.todLatch = null;
+    this.todStopped = s.todStopped; this.todCycles = s.todCycles ?? 0;
     this.onIrq(this.irqOut);
   }
 }

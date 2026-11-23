@@ -12,6 +12,7 @@ import { SidRecorder, buildPsid, toTicks } from '../src/core/sidrecord';
 import { WavRecorder } from '../src/core/wav';
 import { decodeSprite, encodeSprite, getPixel, readSpd, readSpriteFile, setPixel, spritesToAsm, transformSprite, writeSpd } from '../src/core/sprites';
 import { SPRITES_ONLY_KEY } from '../src/core/vic';
+import { VIA6522 } from '../src/core/via';
 import { serializeState, deserializeState } from '../src/core/snapshot';
 import { PALETTES, parseVpl } from '../src/core/palettes';
 import { toVpl } from '../src/renderer/ui/paletteEditor';
@@ -556,6 +557,46 @@ if (roms.dos1541) {
   const mac = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)';
   check('engine: old macOS WebKit is flagged by missing features', engineInfo(mac, {}).old && engineInfo(mac, {}).chromium === null && !engineInfo(mac, modern).old);
   check('engine: Chromium release years', chromiumYear(98) === 2022 && chromiumYear(120) === 2023 && chromiumYear(157) === 2026, `${chromiumYear(98)} ${chromiumYear(120)} ${chromiumYear(157)}`);
+}
+
+// ---- performance paths that must match the cycle-by-cycle models (pure)
+{
+  // VIA timers advanced in one go (the drive does this lazily) against clock() per cycle
+  let seed = 7;
+  const rnd = (n: number) => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return (seed >>> 8) % n; };
+  const ports = { readA: () => 0xff, readB: () => 0xff };
+  let bad = '';
+  for (let run = 0; run < 400 && !bad; run++) {
+    const a = new VIA6522('A', ports), b = new VIA6522('B', ports);
+    const setup = (v: VIA6522) => {
+      v.write(0xb, [0, 0x40, 0x20, 0x60][run & 3]); // ACR: one-shot / free run, T2 timed / counting
+      v.write(0xe, 0xff);
+      v.write(0x4, run % 7); v.write(0x5, run % 3); // T1 latch + start
+      v.write(0x8, run % 11); v.write(0x9, run % 2); // T2 start
+    };
+    setup(a); setup(b);
+    const irqs: number[][] = [[], []];
+    let t = 0;
+    a.onIrq = (on) => { if (on) irqs[0].push(t); };
+    b.onIrq = (on) => { if (on) irqs[1].push(t); };
+    for (let step = 0; step < 60; step++) {
+      // b jumps to its next flag (or a random distance), as the drive does; a clocks every cycle
+      const n = Math.min(1 + rnd(3000), b.eventIn());
+      for (let i = 0; i < n; i++) { t++; a.clock(); }
+      b.advance(n);
+      if (a.t1c !== b.t1c || a.t2c !== b.t2c || a.t1Armed !== b.t1Armed || a.t2Armed !== b.t2Armed || a.ifr !== b.ifr) {
+        bad = `run ${run} step ${step}: t1 ${a.t1c}/${b.t1c} t2 ${a.t2c}/${b.t2c} armed ${a.t1Armed}/${b.t1Armed} ${a.t2Armed}/${b.t2Armed} ifr ${a.ifr}/${b.ifr}`;
+        break;
+      }
+      // the program acknowledges the flags, and sometimes restarts a timer
+      for (const v of [a, b]) v.write(0xd, 0x7f);
+      const r = rnd(6), val = rnd(256);
+      if (r === 0) { a.write(0x5, val & 3); b.write(0x5, val & 3); }
+      if (r === 1) { a.write(0x9, val & 1); b.write(0x9, val & 1); }
+    }
+    if (!bad && irqs[0].join() !== irqs[1].join()) bad = `run ${run}: IRQ cycles ${irqs[0].slice(0, 6)} vs ${irqs[1].slice(0, 6)}`;
+  }
+  check('VIA advance(n) matches n cycles of clock()', !bad, bad);
 }
 
 // ---- frame capture: sprites that only moved (pure)

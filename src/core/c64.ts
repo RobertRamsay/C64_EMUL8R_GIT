@@ -692,14 +692,14 @@ export class C64 implements CpuBus, VicMemory {
   stepOutSp = -1;
   stepDrive = false;
   private trapMap = new Map<number, () => boolean>();
-  /** lowest trap address, so most instructions skip the trap lookup */
-  private trapMin = 0x10000;
+  /** 1 at trap addresses, so instructions skip the map lookup */
+  private trapAt = new Uint8Array(0x10000);
 
   /** Execute a single instruction with all debug checks; sets `stop` when halted. */
   private execOne(): void {
     const cpu = this.cpu;
     const pc = cpu.pc;
-    if (pc >= this.trapMin && this.kernalMapped) {
+    if (this.trapAt[pc] && this.kernalMapped) {
       const trap = this.trapMap.get(pc);
       if (trap && trap()) return;
     }
@@ -738,7 +738,7 @@ export class C64 implements CpuBus, VicMemory {
       // turbo speeds the per-instruction checks cost as much as the instruction
       const cpu = this.cpu;
       while (!vic.frameReady) {
-        if (cpu.pc >= this.trapMin && this.kernalMapped) {
+        if (this.trapAt[cpu.pc] && this.kernalMapped) {
           const trap = this.trapMap.get(cpu.pc);
           if (trap && trap()) { if (this.stop) return this.stop; continue; }
         }
@@ -947,12 +947,13 @@ export class C64 implements CpuBus, VicMemory {
 
   updateTraps(): void {
     this.trapMap.clear();
+    this.trapAt.fill(0);
     const fastDrive = !this.drive.enabled;
     if (fastDrive) {
       this.trapMap.set(0xf4a5, () => this.trapLoad());
       this.trapMap.set(0xf5ed, () => this.trapSave());
     }
-    this.trapMin = Math.min(0x10000, ...this.trapMap.keys());
+    for (const a of this.trapMap.keys()) this.trapAt[a] = 1;
   }
 
   private rts(): void {

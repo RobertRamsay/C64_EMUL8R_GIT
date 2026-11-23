@@ -41,6 +41,9 @@ export class Drive1541 implements CpuBus {
   private latchedByte = 0;
   /** activity counter used by the UI and autostart warp */
   lastActivityFrame = 0;
+  /** drive clock the VIA timers have been advanced to, and the clock of their next flag */
+  private viaAt = 0;
+  private viaEvent = 0;
   // debugger
   bpFlags = new Uint8Array(0x10000);
   breakHit = false;
@@ -91,6 +94,7 @@ export class Drive1541 implements CpuBus {
   reset(): void {
     this.ram.fill(0);
     this.via1.reset(); this.via2.reset();
+    this.viaAt = this.clock; this.syncVias();
     this.cpu.irqLines = 0;
     this.cpu.reset();
     this.motor = false; this.led = false;
@@ -141,6 +145,7 @@ export class Drive1541 implements CpuBus {
   peek(addr: number): number {
     addr &= 0xffff;
     if (addr < 0x1800) return this.ram[addr & 0x7ff];
+    this.syncVias();
     if (addr < 0x1c00) return this.via1.peek(addr);
     if (addr < 0x2000) return this.via2.peek(addr);
     if (addr >= 0x8000) return this.rom[addr & 0x3fff];
@@ -156,13 +161,14 @@ export class Drive1541 implements CpuBus {
       if (v < 0) return this.ram[addr & 0x7ff];
       this.ram[addr & 0x7ff] = v; return 0;
     }
-    if (addr < 0x1c00) {
-      if (v < 0) return this.via1.read(addr);
-      this.via1.write(addr, v); return 0;
-    }
     if (addr < 0x2000) {
-      if (v < 0) return this.via2.read(addr);
-      this.via2.write(addr, v); return 0;
+      // the timers catch up first, and may have a new next event afterwards
+      this.syncVias();
+      const via = addr < 0x1c00 ? this.via1 : this.via2;
+      let r = 0;
+      if (v < 0) r = via.read(addr); else via.write(addr, v);
+      this.viaEvent = this.clock + Math.min(this.via1.eventIn(), this.via2.eventIn());
+      return r;
     }
     if (addr >= 0x8000 && v < 0) return this.rom[addr & 0x3fff];
     return v < 0 ? addr >> 8 : 0;
@@ -171,9 +177,15 @@ export class Drive1541 implements CpuBus {
   private tick(): void {
     this.cpu.sampleInterrupts();
     this.clock++;
-    this.via1.clock();
-    this.via2.clock();
+    if (this.clock >= this.viaEvent) this.syncVias();
     this.rotate();
+  }
+
+  /** Bring the VIA timers up to the drive clock (they are advanced lazily) and find their next flag. */
+  syncVias(): void {
+    const n = this.clock - this.viaAt;
+    if (n > 0) { this.via1.advance(n); this.via2.advance(n); this.viaAt = this.clock; }
+    this.viaEvent = this.clock + Math.min(this.via1.eventIn(), this.via2.eventIn());
   }
 
   private rotate(): void {
@@ -220,6 +232,7 @@ export class Drive1541 implements CpuBus {
   }
 
   saveState(): any {
+    this.syncVias();
     return {
       ram: Array.from(this.ram), cpu: this.cpu.getState(), via1: this.via1.saveState(), via2: this.via2.saveState(),
       clock: this.clock, halfTrack: this.halfTrack, stepPhase: this.stepPhase, headPos: this.headPos, motor: this.motor, led: this.led,
@@ -229,5 +242,6 @@ export class Drive1541 implements CpuBus {
     this.ram.set(s.ram); this.cpu.setState(s.cpu); this.via1.loadState(s.via1); this.via2.loadState(s.via2);
     this.clock = s.clock; this.halfTrack = s.halfTrack; this.stepPhase = s.stepPhase; this.headPos = s.headPos;
     this.motor = s.motor; this.led = s.led;
+    this.viaAt = this.clock; this.syncVias();
   }
 }

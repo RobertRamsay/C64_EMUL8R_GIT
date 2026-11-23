@@ -47,6 +47,28 @@ const LAST_VIS_CYCLE = 60;
 /** first cycle after the line's sprite fetches; sprite output runs from here */
 const SPRITE_START_CYCLE = 11;
 
+/** pixel byte flag: graphics foreground */
+const FG = 0x10;
+/** a byte repeated in all four bytes of a word */
+const REP = 0x01010101;
+/** hires: for 4 bits (leftmost pixel in bit 3), 0xff in the bytes of the pixels that are set */
+const HIRES = new Uint32Array(16);
+/** multicolour: for 4 bits (two pixel pairs), 0xff in the bytes whose pair has the value 0, 1, 2, 3 */
+const MC0 = new Uint32Array(16), MC1 = new Uint32Array(16), MC2 = new Uint32Array(16), MC3 = new Uint32Array(16);
+for (let n = 0; n < 16; n++) {
+  const mc = [MC0, MC1, MC2, MC3];
+  for (let k = 0; k < 4; k++) {
+    const b = 0xff << (8 * k);
+    if ((n >> (3 - k)) & 1) HIRES[n] |= b;
+    mc[(n >> (k < 2 ? 2 : 0)) & 3][n] |= b;
+  }
+}
+/** idle state: foreground pixels lose their colour (black), keeping FG */
+function blackFg(w: number): number {
+  const fg = w & 0x10101010;
+  return (w & ~((fg >>> 4) * 0xff)) | fg;
+}
+
 export class VICII {
   model: VicModel = PAL;
   regs = new Uint8Array(0x40);
@@ -72,6 +94,8 @@ export class VICII {
   private mxColor = new Uint8Array(40);
   // sprite state
   private spDma = new Uint8Array(8);
+  /** spDma as a bitmask */
+  private spDmaBits = 0;
   private spDisplay = new Uint8Array(8);
   private spMc = new Uint8Array(8);
   private spMcBase = new Uint8Array(8);
@@ -84,6 +108,13 @@ export class VICII {
   private spLineMask = 0;
   private spPos = new Int16Array(8);   // pixels shifted out; -1 waiting for X, -2 finished
   private spPtr = new Uint8Array(8);
+  /** sprites of spLineMask waiting for their X position, and those shifting out now */
+  private spWait = 0;
+  private spRun = 0;
+  // per model tables, indexed by cycle (1-based): the sprite whose p-access is in
+  // that cycle (-1 none), and the sprites whose DMA holds BA low in that cycle
+  private spriteAt = new Int8Array(0);
+  private baSprites = new Uint8Array(0);
   /** sprites displayed during the last complete frame, in order (debugger) */
   spSeen: SpriteSeen[] = [];
   private spSeenCur: SpriteSeen[] = [];
@@ -93,19 +124,24 @@ export class VICII {
   // border
   private mainBorder = true;
   private vertBorder = true;
-  // graphics decode pipeline (previous and current column)
-  private gPrevColor = new Uint8Array(8);
-  private gPrevFg = new Uint8Array(8);
-  private gCurColor = new Uint8Array(8);
-  private gCurFg = new Uint8Array(8);
+  // Pixels are bytes: colour (0..15) | FG for graphics foreground (sprite priority and
+  // collisions), handled four at a time through Uint32Array views (little endian: the
+  // leftmost pixel is the lowest byte).
+  /** graphics decode pipeline: bytes 0..7 the previous column, 8..15 the current one */
+  private gBuf = new Uint8Array(16);
+  private gBuf32 = new Uint32Array(this.gBuf.buffer);
   // per line buffers (index = x + 8)
+  /** background/foreground pixels, sprites drawn over them */
   private lineColor = new Uint8Array(SCREEN_W);
-  private lineFg = new Uint8Array(SCREEN_W);
+  private lineColor32 = new Uint32Array(this.lineColor.buffer);
+  /** border colour per pixel, 0xff where the border is open */
   private lineBorder = new Uint8Array(SCREEN_W);
+  private lineBorder32 = new Uint32Array(this.lineBorder.buffer);
   /** sprite colour per pixel of the current line for sprites-only mode (0xff = none) */
   private lineSpr = new Uint8Array(SCREEN_W).fill(0xff);
   // output
   framebuffer = new Uint8Array(SCREEN_W * 312); // color indices
+  private fb32 = new Uint32Array(this.framebuffer.buffer);
   frameReady = false;
   onIrq: (active: boolean) => void = () => {};
   /** Called at the start of every raster line (debugger raster breakpoints). */
@@ -131,11 +167,34 @@ export class VICII {
   /** Skip pixel output (timing, fetches, IRQs and border logic still run). Used by warp. */
   skipRender = false;
 
-  constructor(public mem: VicMemory) {}
+  constructor(public mem: VicMemory) { this.buildTables(); }
 
   setModel(m: VicModel): void {
     this.model = m;
     this.framebuffer = new Uint8Array(SCREEN_W * m.visibleLines);
+    this.fb32 = new Uint32Array(this.framebuffer.buffer);
+    this.buildTables();
+  }
+
+  private buildTables(): void {
+    const m = this.model, cpl = m.cyclesPerLine, pc = m.spritePCycle;
+    this.spriteAt = new Int8Array(cpl + 2).fill(-1);
+    this.baSprites = new Uint8Array(cpl + 2);
+    for (let c = 1; c <= cpl; c++) {
+      for (let i = 0; i < 8; i++) {
+        if (pc[i] === c) this.spriteAt[c] = i;
+        // sprite DMA keeps BA low from P-3 .. P+1
+        let d = c - pc[i];
+        if (d > cpl / 2) d -= cpl; else if (d < -cpl / 2) d += cpl;
+        if (d >= -3 && d <= 1) this.baSprites[c] |= 1 << i;
+      }
+    }
+  }
+
+  private updateDmaBits(): void {
+    let b = 0;
+    for (let i = 0; i < 8; i++) if (this.spDma[i]) b |= 1 << i;
+    this.spDmaBits = b;
   }
 
   reset(): void {
@@ -147,6 +206,7 @@ export class VICII {
     this.irqFlags = 0; this.setIrq(false);
     this.rasterCompare = 0;
     this.spDma.fill(0); this.spDisplay.fill(0); this.spExpFF.fill(1);
+    this.spDmaBits = 0;
     this.spSpriteColl = this.spBgColl = 0;
   }
 
@@ -236,17 +296,7 @@ export class VICII {
   isBALow(): boolean { return this.ba; }
 
   private computeBA(c: number): boolean {
-    if (this.badline && c >= 12 && c <= 54) return true;
-    const pc = this.model.spritePCycle;
-    const cpl = this.model.cyclesPerLine;
-    for (let i = 0; i < 8; i++) {
-      // sprite DMA needed for this sprite?  BA low from P-3 .. P+1
-      if (!this.spDma[i]) continue;
-      let d = c - pc[i];
-      if (d > cpl / 2) d -= cpl; else if (d < -cpl / 2) d += cpl;
-      if (d >= -3 && d <= 1) return true;
-    }
-    return false;
+    return (this.badline && c >= 12 && c <= 54) || (this.spDmaBits & this.baSprites[c]) !== 0;
   }
 
   // ---- main clock ----
@@ -281,10 +331,8 @@ export class VICII {
     }
 
     // sprite pointer + data accesses
-    const pcs = m.spritePCycle;
-    for (let i = 0; i < 8; i++) {
-      if (pcs[i] === c) this.spriteFetch(i);
-    }
+    const si = this.spriteAt[c];
+    if (si >= 0) this.spriteFetch(si);
 
     switch (c) {
       case 10: {
@@ -311,6 +359,7 @@ export class VICII {
           if (this.spExpFF[i]) this.spMcBase[i] = (this.spMcBase[i] + 1) & 0x3f;
           if (this.spMcBase[i] === 63) { this.spDma[i] = 0; this.spDisplay[i] = 0; }
         }
+        this.updateDmaBits();
         break;
       case 55:
       case 56: {
@@ -324,6 +373,7 @@ export class VICII {
             if (yexp & (1 << i)) this.spExpFF[i] = 0;
           }
         }
+        this.updateDmaBits();
         break;
       }
       case 58:
@@ -405,18 +455,21 @@ export class VICII {
     }
   }
 
+  /** the current column's pixels become the previous column's */
+  private shiftColumns(): void {
+    const g = this.gBuf32;
+    g[0] = g[2]; g[1] = g[3];
+  }
+
   private decodeBlank(): void {
-    this.gPrevColor.set(this.gCurColor);
-    this.gPrevFg.set(this.gCurFg);
-    const bg = this.bg0;
-    this.gCurColor.fill(bg);
-    this.gCurFg.fill(0);
+    this.shiftColumns();
+    const bg = this.bg0 * REP;
+    this.gBuf32[2] = bg; this.gBuf32[3] = bg;
   }
 
   /** g-access for display column `col` and decode it into 8 pixels. */
   private gAccess(col: number): void {
-    this.gPrevColor.set(this.gCurColor);
-    this.gPrevFg.set(this.gCurFg);
+    this.shiftColumns();
     const r11 = this.regs[0x11], r16 = this.regs[0x16], r18 = this.regs[0x18];
     const ecm = r11 & 0x40, bmm = r11 & 0x20, mcm = r16 & 0x10;
     let data: number, ch = 0, color = 0;
@@ -435,74 +488,46 @@ export class VICII {
     }
     this.lastBus = data;
     if (this.skipRender) return;
-    const out = this.gCurColor, fg = this.gCurFg;
     const b0 = this.bg0;
     if (!this.showBackground) data = 0;
-    const mode = (ecm ? 4 : 0) | (bmm ? 2 : 0) | (mcm ? 1 : 0);
-    switch (mode) {
-      case 0: { // standard text
-        for (let p = 0; p < 8; p++) {
-          const bit = (data >> (7 - p)) & 1;
-          out[p] = bit ? color : b0; fg[p] = bit;
-        }
+    const hi = data >> 4, lo = data & 15;
+    // hires: a 1 bit shows `on` (with FG), a 0 bit `off`; multicolour: 2 bits per pixel pair
+    // pick c0..c3, where c2 and c3 are foreground
+    let w0: number, w1: number;
+    let on = -1, off = 0, c0 = 0, c1 = 0, c2 = 0, c3 = 0;
+    switch ((ecm ? 4 : 0) | (bmm ? 2 : 0) | (mcm ? 1 : 0)) {
+      case 0: on = color; off = b0; break; // standard text
+      case 1: // multicolour text
+        if (color & 8) { c0 = b0; c1 = this.regs[0x22] & 15; c2 = this.regs[0x23] & 15; c3 = color & 7; }
+        else { on = color; off = b0; }
         break;
-      }
-      case 1: { // multicolor text
-        if (color & 8) {
-          const cols = [b0, this.regs[0x22] & 15, this.regs[0x23] & 15, color & 7];
-          for (let p = 0; p < 8; p += 2) {
-            const v = (data >> (6 - p)) & 3;
-            out[p] = out[p + 1] = cols[v]; fg[p] = fg[p + 1] = v >= 2 ? 1 : 0;
-          }
-        } else {
-          for (let p = 0; p < 8; p++) {
-            const bit = (data >> (7 - p)) & 1;
-            out[p] = bit ? color : b0; fg[p] = bit;
-          }
-        }
-        break;
-      }
-      case 2: { // standard bitmap
-        const c1 = ch >> 4, c0 = ch & 15;
-        for (let p = 0; p < 8; p++) {
-          const bit = (data >> (7 - p)) & 1;
-          out[p] = bit ? c1 : c0; fg[p] = bit;
-        }
-        break;
-      }
-      case 3: { // multicolor bitmap
-        const cols = [b0, ch >> 4, ch & 15, color];
-        for (let p = 0; p < 8; p += 2) {
-          const v = (data >> (6 - p)) & 3;
-          out[p] = out[p + 1] = cols[v]; fg[p] = fg[p + 1] = v >= 2 ? 1 : 0;
-        }
-        break;
-      }
-      case 4: { // ECM text
-        const bg = ch >> 6 ? this.regs[0x21 + (ch >> 6)] & 15 : this.bg0;
-        for (let p = 0; p < 8; p++) {
-          const bit = (data >> (7 - p)) & 1;
-          out[p] = bit ? color : bg; fg[p] = bit;
-        }
-        break;
-      }
-      default: { // invalid modes: black, but foreground still detected for collisions
-        if (mode === 5 && !(color & 8)) {
-          for (let p = 0; p < 8; p++) { const bit = (data >> (7 - p)) & 1; out[p] = 0; fg[p] = bit; }
-        } else if (mode === 5 || mode === 7) {
-          for (let p = 0; p < 8; p += 2) { const v = (data >> (6 - p)) & 3; out[p] = out[p + 1] = 0; fg[p] = fg[p + 1] = v >= 2 ? 1 : 0; }
-        } else {
-          for (let p = 0; p < 8; p++) { const bit = (data >> (7 - p)) & 1; out[p] = 0; fg[p] = bit; }
-        }
-      }
+      case 2: on = ch >> 4; off = ch & 15; break; // standard bitmap
+      case 3: c0 = b0; c1 = ch >> 4; c2 = ch & 15; c3 = color; break; // multicolour bitmap
+      case 4: on = color; off = ch >> 6 ? this.regs[0x21 + (ch >> 6)] & 15 : b0; break; // ECM text
+      // invalid modes: black, but foreground still detected for collisions
+      case 5: if (!(color & 8)) { on = 0; off = 0; } break;
+      case 6: on = 0; off = 0; break;
+      default: break; // 7: multicolour, all black
     }
-    if (!this.displayState) {
+    if (on >= 0) {
+      const a = (on | FG) * REP, b = off * REP;
+      let m = HIRES[hi]; w0 = (a & m) | (b & ~m);
+      m = HIRES[lo]; w1 = (a & m) | (b & ~m);
+    } else {
+      const k0 = c0 * REP, k1 = c1 * REP, k2 = (c2 | FG) * REP, k3 = (c3 | FG) * REP;
+      w0 = (k0 & MC0[hi]) | (k1 & MC1[hi]) | (k2 & MC2[hi]) | (k3 & MC3[hi]);
+      w1 = (k0 & MC0[lo]) | (k1 & MC1[lo]) | (k2 & MC2[lo]) | (k3 & MC3[lo]);
+    }
+    if (!this.displayState && !bmm) {
       // idle state: no color information, foreground pixels are black
-      for (let p = 0; p < 8; p++) if (fg[p] && !bmm) out[p] = 0;
+      w0 = blackFg(w0); w1 = blackFg(w1);
     }
+    this.gBuf32[2] = w0; this.gBuf32[3] = w1;
   }
 
   private renderCycle(c: number): void {
+    // cycles 1..10: nothing is drawn, no border comparison, sprites not yet loaded
+    if (c < SPRITE_START_CYCLE) return;
     const m = this.model;
     const r11 = this.regs[0x11];
     const rsel = r11 & 0x08, csel = this.regs[0x16] & 0x08;
@@ -530,31 +555,70 @@ export class VICII {
       }
       return;
     }
-    if (c >= FIRST_VIS_CYCLE && c <= LAST_VIS_CYCLE) this.renderBackground(c, x0, visibleLine);
+    const inWindow = c >= FIRST_VIS_CYCLE && c <= LAST_VIS_CYCLE;
+    // border over these 8 pixels: 1 all, 0 none, -1 changes within them
+    const border = inWindow ? this.renderBackground(c, x0, visibleLine, r11, top, bottom, left, right) : 0;
     // sprites are shifted out across the whole line, hidden parts included, so
     // they collide and start at the right X even outside the visible window
     if (visibleLine && c >= SPRITE_START_CYCLE && this.spLineMask) {
       if (c === SPRITE_START_CYCLE) {
         this.spPos.fill(-1);
+        this.spWait = this.spLineMask; this.spRun = 0;
         // X positions of cycles 1..10, before this line's data was complete
-        for (let x = 8 - 112; x < x0; x++) this.spritePixel(x);
+        for (let xb = 8 - 112; xb < x0; xb += 8) this.spritePixels(xb);
       }
-      for (let p = 0; p < 8; p++) this.spritePixel(x0 + p);
+      this.spritePixels(x0);
     }
-    if (c === LAST_VIS_CYCLE + 3 && visibleLine) this.finishLine();
+    if (!visibleLine) return;
+    if (this.spritesOnly) { if (c === LAST_VIS_CYCLE + 3) this.finishLine(); return; }
+    if (!inWindow) return;
+    // these 8 pixels are final now: into the framebuffer
+    const base = x0 + 8, row = (raster - m.firstVisibleLine) * SCREEN_W;
+    if (border === 1) {
+      const bc = (this.regs[0x20] & 15) * REP, w = (row + base) >> 2;
+      this.fb32[w] = bc; this.fb32[w + 1] = bc;
+    } else if (border === 0) {
+      const lc = this.lineColor32, w = (row + base) >> 2, l = base >> 2;
+      this.fb32[w] = lc[l] & 0x0f0f0f0f; this.fb32[w + 1] = lc[l + 1] & 0x0f0f0f0f;
+    } else {
+      const fb = this.framebuffer, lc = this.lineColor, lb = this.lineBorder;
+      for (let i = base; i < base + 8; i++) fb[row + i] = lb[i] !== 0xff ? lb[i] : lc[i] & 15;
+    }
   }
 
-  private renderBackground(c: number, x0: number, visibleLine: boolean): void {
-    const r11 = this.regs[0x11];
-    const rsel = r11 & 0x08, csel = this.regs[0x16] & 0x08;
-    const top = rsel ? 51 : 55, bottom = rsel ? 251 : 247;
-    const left = csel ? 24 : 31, right = csel ? 344 : 335;
+  /** Background pixels of one cycle and the border flip-flops; returns the border coverage (see renderCycle). */
+  private renderBackground(c: number, x0: number, visibleLine: boolean, r11: number, top: number, bottom: number, left: number, right: number): number {
     const raster = this.raster;
     const xs = this.regs[0x16] & 7;
     const borderCol = this.regs[0x20] & 15;
     const bg0 = this.bg0;
-    const lc = this.lineColor, lf = this.lineFg, lb = this.lineBorder;
+    const lc = this.lineColor, lb = this.lineBorder;
     const gc = c - 17; // column whose pixels start in this cycle
+    const base = x0 + 8;
+    if (((left - x0) >>> 0) > 7 && ((right - x0) >>> 0) > 7) {
+      // the border flip-flops don't change within these 8 pixels
+      if (!visibleLine) return 0;
+      const l = base >> 2, lc32 = this.lineColor32;
+      const bw = this.mainBorder ? borderCol * REP : -1;
+      this.lineBorder32[l] = bw; this.lineBorder32[l + 1] = bw;
+      if (gc >= 0 && gc < 40) {
+        // pixel p shows byte 8 - xs + p of the previous|current column pair (XSCROLL delay)
+        const g = this.gBuf32, o = 8 - xs, q = o >> 2, s = (o & 3) << 3;
+        if (s === 0) { lc32[l] = g[q]; lc32[l + 1] = g[q + 1]; }
+        else {
+          lc32[l] = (g[q] >>> s) | (g[q + 1] << (32 - s));
+          lc32[l + 1] = (g[q + 1] >>> s) | (g[q + 2] << (32 - s));
+        }
+      } else if (gc === 40) {
+        const gb = this.gBuf;
+        for (let p = 0; p < 8; p++) lc[base + p] = p < xs ? gb[8 - xs + p] : bg0;
+      } else {
+        const bw0 = bg0 * REP;
+        lc32[l] = bw0; lc32[l + 1] = bw0;
+      }
+      return this.mainBorder ? 1 : 0;
+    }
+    const gb = this.gBuf;
     for (let p = 0; p < 8; p++) {
       const x = x0 + p;
       if (x === right) this.mainBorder = true;
@@ -565,27 +629,34 @@ export class VICII {
       }
       if (!visibleLine) continue;
       const idx = x + 8;
-      let col: number, fg: number;
-      if (gc < 0 || gc > 40) { col = bg0; fg = 0; }
-      else if (p >= xs) { col = this.gCurColor[p - xs]; fg = this.gCurFg[p - xs]; }
-      else { col = this.gPrevColor[8 - xs + p]; fg = this.gPrevFg[8 - xs + p]; }
-      if (gc === 40 && p >= xs) { col = bg0; fg = 0; }
-      lc[idx] = col; lf[idx] = fg;
+      lc[idx] = gc < 0 || gc > 40 || (gc === 40 && p >= xs) ? bg0 : gb[8 - xs + p];
       lb[idx] = this.mainBorder ? borderCol : 0xff;
     }
+    return -1;
   }
 
-  /** Write the finished line (sprites already composited) into the framebuffer. */
+  /** Sprites-only mode: write the finished line into the framebuffer. */
   private finishLine(): void {
-    const lc = this.lineColor, lb = this.lineBorder;
+    const lb = this.lineBorder;
     const row = (this.raster - this.model.firstVisibleLine) * SCREEN_W;
     const fb = this.framebuffer;
-    if (this.spritesOnly) {
-      const ls = this.lineSpr, key = this.bgOverride >= 0 ? this.bgOverride : SPRITES_ONLY_KEY;
-      for (let i = 0; i < SCREEN_W; i++) { fb[row + i] = lb[i] !== 0xff || ls[i] === 0xff ? key : ls[i]; ls[i] = 0xff; }
-      return;
+    const ls = this.lineSpr, key = this.bgOverride >= 0 ? this.bgOverride : SPRITES_ONLY_KEY;
+    for (let i = 0; i < SCREEN_W; i++) { fb[row + i] = lb[i] !== 0xff || ls[i] === 0xff ? key : ls[i]; ls[i] = 0xff; }
+  }
+
+  /** Sprite pixels x0..x0+7 (x0 a multiple of 8); nothing to do unless a sprite is shifting out or starts there. */
+  private spritePixels(x0: number): void {
+    if (!this.spRun) {
+      const s0 = x0 < 0 ? x0 + this.model.cyclesPerLine * 8 : x0;
+      let w = this.spWait, starts = false;
+      while (w) {
+        const b = w & -w;
+        w ^= b;
+        if (((this.spX[31 - Math.clz32(b)] - s0) >>> 0) < 8) { starts = true; break; }
+      }
+      if (!starts) return;
     }
-    for (let i = 0; i < SCREEN_W; i++) fb[row + i] = lb[i] !== 0xff ? lb[i] : lc[i];
+    for (let p = 0; p < 8; p++) this.spritePixel(x0 + p);
   }
 
   /**
@@ -599,12 +670,16 @@ export class VICII {
     const sx = x < 0 ? x + lineW : x;
     const r = this.regs;
     let hits = 0, first = -1, firstCol = 0;
-    for (let i = 0; i < 8; i++) {
-      if (!(this.spLineMask & (1 << i))) continue;
+    // lowest sprite first: sprite 0 has the highest priority
+    for (let m = this.spWait | this.spRun; m; ) {
+      const bit = m & -m;
+      m ^= bit;
+      const i = 31 - Math.clz32(bit);
       let pos = this.spPos[i];
       if (pos < 0) {
-        if (pos === -2 || this.spX[i] !== sx) continue;
+        if (this.spX[i] !== sx) continue;
         pos = 0;
+        this.spWait ^= bit; this.spRun |= bit;
       }
       const exp = r[0x1d] & (1 << i) ? 2 : 1;
       const b = exp === 2 ? pos >> 1 : pos;
@@ -616,7 +691,7 @@ export class VICII {
       } else if ((d >> (23 - b)) & 1) {
         pc = r[0x27 + i] & 15;
       }
-      this.spPos[i] = ++pos >= 24 * exp ? -2 : pos;
+      if (++pos >= 24 * exp) { this.spPos[i] = -2; this.spRun ^= bit; } else this.spPos[i] = pos;
       if (pc < 0) continue;
       hits |= 1 << i;
       // sprite 0 has the highest priority: the first sprite with a pixel wins
@@ -629,7 +704,7 @@ export class VICII {
     }
     const idx = x + 8;
     if (idx < 0 || idx >= SCREEN_W) return;
-    const fg = this.lineFg[idx];
+    const fg = this.lineColor[idx] & FG;
     if (fg) {
       if (this.spBgColl === 0) this.raiseIrq(0x02);
       this.spBgColl |= hits;
@@ -663,6 +738,7 @@ export class VICII {
     this.raster = s.raster; this.cycle = s.cycle; this.vc = s.vc; this.vcBase = s.vcBase; this.rc = s.rc; this.vmli = s.vmli;
     this.displayState = s.displayState; this.denLatched = s.denLatched; this.irqFlags = s.irqFlags; this.rasterCompare = s.rasterCompare;
     this.mxChar.set(s.mxChar); this.mxColor.set(s.mxColor); this.spDma.set(s.spDma); this.spDisplay.set(s.spDisplay);
+    this.updateDmaBits();
     this.spMc.set(s.spMc); this.spMcBase.set(s.spMcBase); this.spExpFF.set(s.spExpFF); this.spData.set(s.spData); this.spFetched.set(s.spFetched);
     this.spSpriteColl = s.spSpriteColl; this.spBgColl = s.spBgColl; this.mainBorder = s.mainBorder; this.vertBorder = s.vertBorder; this.ba = s.ba;
     this.updateBadline();
