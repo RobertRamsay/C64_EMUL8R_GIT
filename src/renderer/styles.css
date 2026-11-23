@@ -96,6 +96,13 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .menu button:hover { background: var(--bg3); }
 .menu button .kbd { margin-left: auto; color: var(--muted); font-size: 11px; }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+.menu .bgcap { padding: 4px 10px 6px; }
+.menu .bgcap-lab { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+.menu .bgcap-row { display: grid; grid-template-columns: repeat(8, 18px) auto; grid-template-rows: 18px 18px; gap: 3px; align-items: center; }
+.menu .bgcap-sw { width: 18px; height: 18px; border-radius: 3px; border: 1px solid rgba(255, 255, 255, .25); cursor: pointer; box-sizing: border-box; }
+.menu .bgcap-sw:hover, .menu .bgcap-sw.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+.menu .bgcap-off { grid-row: 1 / 3; grid-column: 9; margin-left: 6px; padding: 0 8px; height: 39px; display: flex; align-items: center; border: 1px solid var(--line2); border-radius: 4px; color: var(--muted); font-size: 11px; cursor: pointer; }
+.menu .bgcap-off:hover, .menu .bgcap-off.on { color: var(--silver-hi); border-color: var(--accent); }
 .menu .menu-title { padding: 4px 10px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
 
 /* ------------------------------------------------------------ workspace */

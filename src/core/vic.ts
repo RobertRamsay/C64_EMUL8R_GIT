@@ -122,6 +122,12 @@ export class VICII {
    * border stay hidden.
    */
   spritesOnly = false;
+  /**
+   * Display only: draw this colour (0..15) wherever $D021 would show, and in
+   * sprites-only mode instead of the empty key. -1 = off (use $D021).
+   */
+  bgOverride = -1;
+  private get bg0(): number { return this.bgOverride >= 0 ? this.bgOverride : this.regs[0x21] & 15; }
   /** Skip pixel output (timing, fetches, IRQs and border logic still run). Used by warp. */
   skipRender = false;
 
@@ -402,7 +408,7 @@ export class VICII {
   private decodeBlank(): void {
     this.gPrevColor.set(this.gCurColor);
     this.gPrevFg.set(this.gCurFg);
-    const bg = this.regs[0x21] & 0x0f;
+    const bg = this.bg0;
     this.gCurColor.fill(bg);
     this.gCurFg.fill(0);
   }
@@ -430,7 +436,7 @@ export class VICII {
     this.lastBus = data;
     if (this.skipRender) return;
     const out = this.gCurColor, fg = this.gCurFg;
-    const b0 = this.regs[0x21] & 15;
+    const b0 = this.bg0;
     if (!this.showBackground) data = 0;
     const mode = (ecm ? 4 : 0) | (bmm ? 2 : 0) | (mcm ? 1 : 0);
     switch (mode) {
@@ -473,7 +479,7 @@ export class VICII {
         break;
       }
       case 4: { // ECM text
-        const bg = this.regs[0x21 + (ch >> 6)] & 15;
+        const bg = ch >> 6 ? this.regs[0x21 + (ch >> 6)] & 15 : this.bg0;
         for (let p = 0; p < 8; p++) {
           const bit = (data >> (7 - p)) & 1;
           out[p] = bit ? color : bg; fg[p] = bit;
@@ -546,7 +552,7 @@ export class VICII {
     const raster = this.raster;
     const xs = this.regs[0x16] & 7;
     const borderCol = this.regs[0x20] & 15;
-    const bg0 = this.regs[0x21] & 15;
+    const bg0 = this.bg0;
     const lc = this.lineColor, lf = this.lineFg, lb = this.lineBorder;
     const gc = c - 17; // column whose pixels start in this cycle
     for (let p = 0; p < 8; p++) {
@@ -575,8 +581,8 @@ export class VICII {
     const row = (this.raster - this.model.firstVisibleLine) * SCREEN_W;
     const fb = this.framebuffer;
     if (this.spritesOnly) {
-      const ls = this.lineSpr;
-      for (let i = 0; i < SCREEN_W; i++) { fb[row + i] = lb[i] !== 0xff || ls[i] === 0xff ? SPRITES_ONLY_KEY : ls[i]; ls[i] = 0xff; }
+      const ls = this.lineSpr, key = this.bgOverride >= 0 ? this.bgOverride : SPRITES_ONLY_KEY;
+      for (let i = 0; i < SCREEN_W; i++) { fb[row + i] = lb[i] !== 0xff || ls[i] === 0xff ? key : ls[i]; ls[i] = 0xff; }
       return;
     }
     for (let i = 0; i < SCREEN_W; i++) fb[row + i] = lb[i] !== 0xff ? lb[i] : lc[i];

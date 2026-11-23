@@ -133,7 +133,17 @@ function check(name: string, ok: boolean, detail = ''): void {
   const only = r109.slice(108, 156).every((v) => v === 2) && r109.slice(0, 108).every((v) => v === SPRITES_ONLY_KEY)
     && r109.slice(156).every((v) => v === SPRITES_ONLY_KEY) && r60.every((v) => v === SPRITES_ONLY_KEY);
   check('sprites-only view keeps sprites, keys out the rest', only, `line 109: ${r109.join(',')}\nline 60: ${r60.join(',')}`);
+  // background override fills the empty part, the sprite stays
+  c.vic.bgOverride = 7;
+  runFrames(c, 2);
+  const o109 = row(109);
+  check('background override behind sprites-only', o109.slice(108, 156).every((v) => v === 2) && o109.slice(0, 108).every((v) => v === 7) && row(60).every((v) => v === 7), o109.join(','));
   c.vic.spritesOnly = false;
+  runFrames(c, 2);
+  // normal view: $D021 pixels (blue, 6) show as 7, the border (light blue, 14) does not change
+  const n109 = row(109), d021 = c.peek(0xd021) & 15;
+  check('background override replaces $D021 on screen only', d021 === 6 && n109.includes(7) && !n109.includes(6) && n109[0] === 14, `d021=${d021} ${n109.join(',')}`);
+  c.vic.bgOverride = -1;
   runFrames(c, 2);
   check('sprites-only view turns off again', spriteRow(109).every((v) => v === 2) && row(60).every((v) => v < 16), row(60).join(','));
 }

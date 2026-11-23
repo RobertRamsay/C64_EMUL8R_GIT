@@ -3,7 +3,8 @@
 
 import './tauriHost'; // provides window.host in the Tauri build
 import { C64, StopReason } from '../core/c64';
-import { PALETTES, parseVpl } from '../core/palettes';
+import { C64_COLOR_NAMES, PALETTES, parseVpl } from '../core/palettes';
+import { cssColour } from './ui/spriteEditor';
 import { attachMedia, detectMedia, parseSid, startSid, SidInfo, MEDIA_EXTENSIONS } from '../core/loaders';
 import { D64 } from '../core/d64';
 import { parseLabels } from '../core/monitor';
@@ -293,6 +294,7 @@ export class App {
       menuItem('Save screenshot (PNG)…', () => this.screenshot(), '', 'camera'),
       menuItem(this.frameCap ? `Stop frame capture (${this.frameCap.saved} saved)` : 'Quick frame capture (changed frames only)', () => void this.toggleFrameCapture(), 'Ctrl+F', 'camera'),
       menuItem('Frame capture folder…', () => void this.chooseFrameDir(), '', 'load'),
+      this.bgCaptureRow(),
       h('hr'),
       ...(['all', 'background', 'sprites'] as SpriteView[]).map((v) =>
         menuItem(`${v === this.spriteView() ? '\u25cf ' : '\u2003 '}${SPRITE_VIEW_LABEL[v]}`, () => this.setSpriteView(v), '', SPRITE_VIEW_ICON[v])),
@@ -1009,6 +1011,32 @@ export class App {
   }
 
   // ------------------------------------------------------------ frame capture
+  /** Display-only $D021 override: on screen, in screenshots and in frame captures (-1 = off). */
+  setCaptureBg(c: number): void {
+    const v = this.c64.vic;
+    v.bgOverride = c;
+    toast(c < 0 ? 'Background colour from $D021 again' : `Background drawn as ${c} (${C64_COLOR_NAMES[c].toLowerCase()})${v.spritesOnly ? ', behind the sprites' : ''}: display only, $D021 is unchanged`, false, 2400);
+  }
+  /** "Bkg colour on capture" swatches for the camera menu; they don't close the menu, so you can try colours on the fly. */
+  private bgCaptureRow(): HTMLElement {
+    const sw: HTMLElement[] = [];
+    const paint = () => {
+      const cur = this.c64.vic.bgOverride;
+      sw.forEach((e, i) => e.classList.toggle('on', i === cur));
+      off.classList.toggle('on', cur < 0);
+    };
+    for (let i = 0; i < 16; i++) {
+      sw.push(h('div', { class: 'bgcap-sw', title: `${i} ${C64_COLOR_NAMES[i]}`, style: `background:${cssColour(this.video.palette[i])}`,
+        onClick: () => { this.setCaptureBg(i); paint(); } }));
+    }
+    const off = h('div', { class: 'bgcap-off', title: 'Use the real $D021 (transparent in sprites-only captures)', onClick: () => { this.setCaptureBg(-1); paint(); } }, 'Off');
+    const row = h('div', { class: 'bgcap', title: 'Draws this colour wherever $D021 shows (or behind the sprites in sprites-only view), on screen and in screenshots and frame captures. Display only: the C64 still sees its own $D021.' },
+      h('div', { class: 'bgcap-lab' }, 'Bkg colour on capture:'),
+      h('div', { class: 'bgcap-row' }, ...sw.slice(0, 8), off, ...sw.slice(8)));
+    paint();
+    return row;
+  }
+
   /** Quick frame capture: every frame that differs from the last saved one becomes a PNG. */
   frameCap: {
     dir: string; start: number; prev: Uint8Array | null; saved: number; same: number;
