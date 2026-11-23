@@ -11,7 +11,7 @@ import { parseLabels } from '../core/monitor';
 import { BinaryMonitor } from '../core/binmon';
 import { deserializeState, serializeState } from '../core/snapshot';
 import { WAV_MAX_SECONDS, WavRecorder } from '../core/wav';
-import { isMovedOnly } from '../core/framediff';
+import { isMovedOnly, findActors } from '../core/framediff';
 import { SPRITES_ONLY_KEY } from '../core/vic';
 import { AudioOut } from './audio';
 import { Video } from './video';
@@ -301,6 +301,12 @@ export class App {
         this.persist();
         toast(this.settings.ui.frameSkipMoved ? 'Sprites-only captures skip frames where the sprites only moved, keeping shape and colour changes' : 'Sprites-only captures save moved sprites too');
       }),
+      menuItem(`${this.settings.ui.frameAutoCrop ? '\u2611' : '\u2610'} Auto-crop to the sprites (sprites-only view)`, () => {
+        this.settings.ui.frameAutoCrop = !this.settings.ui.frameAutoCrop;
+        this.persist();
+        toast(this.settings.ui.frameAutoCrop ? 'Sprites-only captures are cropped to the sprites, one file per actor (see Isolate actors)' : 'Sprites-only captures save the whole screen');
+      }),
+      this.isolateRow(),
       this.bgCaptureRow(),
       h('hr'),
       ...(['all', 'background', 'sprites'] as SpriteView[]).map((v) =>
@@ -1024,6 +1030,17 @@ export class App {
     v.bgOverride = c;
     toast(c < 0 ? 'Background colour from $D021 again' : `Background drawn as ${c} (${C64_COLOR_NAMES[c].toLowerCase()})${v.spritesOnly ? ', behind the sprites' : ''}: display only, $D021 is unchanged`, false, 2400);
   }
+  /** "Isolate actors" choice for auto-crop: how many empty pixels still join two shapes into one actor. */
+  private isolateRow(): HTMLElement {
+    const opts: [number, string][] = [[-1, 'off: one crop of everything'], [0, 'touching only'], [1, '1 px'], [2, '2 px'], [3, '3 px'], [4, '4 px'], [6, '6 px'], [8, '8 px'], [12, '12 px'], [16, '16 px']];
+    const sel = h('select', {
+      onChange: (e: Event) => { this.settings.ui.frameIsolate = Number((e.target as HTMLSelectElement).value); this.persist(); },
+    }, ...opts.map(([v, l]) => h('option', { value: String(v), selected: v === this.settings.ui.frameIsolate }, l))) as HTMLSelectElement;
+    sel.value = String(this.settings.ui.frameIsolate);
+    return h('div', { class: 'isorow', title: 'With auto-crop: shapes further apart than this are separate actors, saved as frame_N_actor1..8.png. Actors keep their number as they move. Shapes this close or closer count as one actor.' },
+      'Isolate actors, joining gaps up to', sel);
+  }
+
   /** "Bkg colour on capture" swatches for the camera menu; they don't close the menu, so you can try colours on the fly. */
   private bgCaptureRow(): HTMLElement {
     const sw: HTMLElement[] = [];
@@ -1048,6 +1065,8 @@ export class App {
   frameCap: {
     dir: string; start: number; prev: Uint8Array | null; saved: number; same: number; moved: number;
     pending: number; dropped: number; failed: string; chain: Promise<void>;
+    /** auto-crop: actor slots 1..8, by where each actor was last seen and what was last saved for it */
+    actors: { cx: number; cy: number; x: number; y: number; w: number; h: number; last: Uint8Array | null }[];
   } | null = null;
 
   async chooseFrameDir(): Promise<string | null> {
@@ -1067,7 +1086,7 @@ export class App {
     const t = new Date(), p2 = (n: number) => String(n).padStart(2, '0');
     const stamp = `${t.getFullYear()}-${p2(t.getMonth() + 1)}-${p2(t.getDate())} ${p2(t.getHours())}${p2(t.getMinutes())}${p2(t.getSeconds())}`;
     const dir = await window.host.joinPath(base, `C64 frames ${stamp}`);
-    this.frameCap = { dir, start: this.c64.frameCount, prev: null, saved: 0, same: 0, moved: 0, pending: 0, dropped: 0, failed: '', chain: Promise.resolve() };
+    this.frameCap = { dir, start: this.c64.frameCount, prev: null, saved: 0, same: 0, moved: 0, pending: 0, dropped: 0, failed: '', chain: Promise.resolve(), actors: [] };
     this.snapBtn.classList.add('rec');
     toast(`Capturing changed frames to ${dir}${this.running ? '' : ' - resume the machine to capture'} (Ctrl+F stops)`, false, 3500);
     this.captureFrame(); // the picture on screen now is the first frame
@@ -1091,28 +1110,74 @@ export class App {
       let same = true;
       for (let i = 0; i < cur.length; i++) if (cur[i] !== prev[i]) { same = false; break; }
       if (same) { cap.same++; return; }
+    }
+    const v = this.c64.vic;
+    const empty = v.bgOverride >= 0 ? v.bgOverride : SPRITES_ONLY_KEY;
+    if (v.spritesOnly && this.settings.ui.frameAutoCrop) { cap.prev = cur; this.captureActors(cur, empty); return; }
+    if (prev && prev.length === cur.length) {
       // sprites-only view: the same sprites, just somewhere else
-      const v = this.c64.vic;
       if (v.spritesOnly && this.settings.ui.frameSkipMoved
-        && isMovedOnly(prev, cur, this.video.crop.w, this.video.crop.h, v.bgOverride >= 0 ? v.bgOverride : SPRITES_ONLY_KEY)) {
+        && isMovedOnly(prev, cur, this.video.crop.w, this.video.crop.h, empty)) {
         cap.moved++; cap.prev = cur; return;
       }
     }
     cap.prev = cur;
     if (cap.pending >= 250) { cap.dropped++; return; } // the encoder can't keep up (warp): don't eat all memory
-    // named by emulated frame since the capture started, so gaps show how long a picture stayed
-    const name = `frame_${String(this.c64.frameCount - cap.start).padStart(6, '0')}.png`;
     const { w, h: ht } = this.video.crop;
+    this.queueFrameFile(cap, this.frameName(cap), cur, w, ht);
+  }
+
+  /** named by emulated frame since the capture started, so gaps show how long a picture stayed */
+  private frameName(cap: NonNullable<App['frameCap']>, suffix = ''): string {
+    return `frame_${String(this.c64.frameCount - cap.start).padStart(6, '0')}${suffix}.png`;
+  }
+
+  private queueFrameFile(cap: NonNullable<App['frameCap']>, name: string, data: Uint8Array, w: number, ht: number): void {
     cap.pending++;
     cap.chain = cap.chain.then(async () => {
       if (cap.failed) return;
       try {
-        await window.host.writeFile(await window.host.joinPath(cap.dir, name), await this.video.png(cur, w, ht));
+        await window.host.writeFile(await window.host.joinPath(cap.dir, name), await this.video.png(data, w, ht));
         cap.saved++;
       } catch (e) {
         cap.failed = String((e as Error)?.message ?? e);
         if (this.frameCap === cap) void this.stopFrameCapture();
       } finally { cap.pending--; }
+    });
+  }
+
+  /**
+   * Auto-crop: each actor cropped to itself. Actors keep their number by
+   * matching each to the nearest slot it was last seen in; an actor is saved
+   * only when its own picture changed (or, with "skip moved" off, also when it moved).
+   */
+  private captureActors(cur: Uint8Array, empty: number): void {
+    const cap = this.frameCap!;
+    const { w, h: ht } = this.video.crop;
+    const gap = this.settings.ui.frameIsolate;
+    const found = findActors(cur, w, ht, empty, gap, 8);
+    // nearest pairs first
+    const pairs: { a: number; s: number; d: number }[] = [];
+    found.forEach((f, a) => cap.actors.forEach((s, si) => pairs.push({ a, s: si, d: Math.hypot(f.x + f.w / 2 - s.cx, f.y + f.h / 2 - s.cy) })));
+    pairs.sort((p, q) => p.d - q.d);
+    const slotOf = new Array<number>(found.length).fill(-1), taken = new Set<number>();
+    for (const p of pairs) if (slotOf[p.a] < 0 && !taken.has(p.s)) { slotOf[p.a] = p.s; taken.add(p.s); }
+    found.forEach((f, a) => {
+      if (slotOf[a] < 0 && cap.actors.length < 8) {
+        slotOf[a] = cap.actors.length;
+        cap.actors.push({ cx: 0, cy: 0, x: -1, y: -1, w: 0, h: 0, last: null });
+      }
+    });
+    found.forEach((f, a) => {
+      const slot = cap.actors[slotOf[a]];
+      if (!slot) return;
+      slot.cx = f.x + f.w / 2; slot.cy = f.y + f.h / 2;
+      const samePic = !!slot.last && slot.w === f.w && slot.h === f.h && slot.last.every((v, i) => v === f.pixels[i]);
+      const moved = slot.x !== f.x || slot.y !== f.y;
+      if (samePic && (!moved || this.settings.ui.frameSkipMoved)) { if (moved) cap.moved++; else cap.same++; return; }
+      slot.last = f.pixels; slot.x = f.x; slot.y = f.y; slot.w = f.w; slot.h = f.h;
+      if (cap.pending >= 250) { cap.dropped++; return; }
+      this.queueFrameFile(cap, this.frameName(cap, gap < 0 ? '' : `_actor${slotOf[a] + 1}`), f.pixels, f.w, f.h);
     });
   }
 

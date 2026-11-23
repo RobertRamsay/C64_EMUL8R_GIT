@@ -12,7 +12,7 @@ import { SidRecorder, buildPsid, toTicks } from '../src/core/sidrecord';
 import { WavRecorder } from '../src/core/wav';
 import { decodeSprite, encodeSprite, getPixel, readSpd, readSpriteFile, setPixel, spritesToAsm, transformSprite, writeSpd } from '../src/core/sprites';
 import { SPRITES_ONLY_KEY } from '../src/core/vic';
-import { isMovedOnly } from '../src/core/framediff';
+import { isMovedOnly, findActors } from '../src/core/framediff';
 
 const candidates = [
   process.env.C64_ROMS,
@@ -536,6 +536,26 @@ if (roms.dos1541) {
   const pair = (dx: number) => { const f = frame(3, 4); const g = frame(20 + dx, 4); for (let i = 0; i < f.length; i++) if (g[i] !== E) f[i] = g[i]; return f; };
   check('moved-only: two sprites moving apart are kept', !isMovedOnly(pair(0), pair(4), W, H, E));
   check('moved-only: empty frames are not "moved"', !isMovedOnly(new Uint8Array(W * H).fill(E), new Uint8Array(W * H).fill(E), W, H, E));
+  // auto-crop: two 6x5 blocks 2 px apart, and an L-shape whose box wraps a dot of another actor
+  {
+    const f = new Uint8Array(W * H).fill(E);
+    const block = (x: number, y: number, col: number) => { for (let r = 0; r < 5; r++) for (let c = 0; c < 6; c++) f[(y + r) * W + x + c] = col; };
+    block(2, 2, 2); block(10, 2, 5); // gap of 2 empty columns (8, 9)
+    const g1 = findActors(f, W, H, E, 1), g2 = findActors(f, W, H, E, 2), all = findActors(f, W, H, E, -1);
+    check('auto-crop: 2 px apart isolates with gap 1', g1.length === 2 && g1[0].x === 2 && g1[0].w === 6 && g1[1].x === 10 && g1[1].pixels.every((v) => v === 5), JSON.stringify(g1.map(({ pixels, ...b }) => b)));
+    check('auto-crop: 2 px apart joins with gap 2', g2.length === 1 && g2[0].w === 14 && g2[0].h === 5);
+    check('auto-crop: off gives one crop', all.length === 1 && all[0].x === 2 && all[0].w === 14);
+    // an L around (20..29, 15..24) and a dot inside its box but 3 px from it
+    for (let i = 0; i < 10; i++) { f[15 * W + 20 + i] = 7; f[(15 + i) * W + 20] = 7; }
+    f[22 * W + 27] = 1;
+    const l = findActors(f, W, H, E, 1);
+    const L = l.find((a) => a.x === 20)!;
+    check('auto-crop: crop holds only its own actor', l.length === 4 && !!L && !L.pixels.includes(1), JSON.stringify(l.map(({ pixels, ...b }) => b)));
+    // more than 8 specks are merged down to 8
+    const g = new Uint8Array(W * H).fill(E);
+    for (let i = 0; i < 12; i++) g[(i * 2) * W + (i * 3)] = 1;
+    check('auto-crop: at most 8 actors', findActors(g, W, H, E, 0, 8).length === 8);
+  }
   check('moved-only: works with a background colour', isMovedOnly(frame(3, 4).map((v) => (v === E ? 6 : v)), frame(9, 9).map((v) => (v === E ? 6 : v)), W, H, 6));
 }
 
