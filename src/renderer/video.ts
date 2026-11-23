@@ -139,13 +139,17 @@ export class Video {
    * Sprites-only empty pixels are fully transparent.
    */
   async png(data: Uint8Array, w: number, h: number): Promise<Uint8Array> {
-    const cv = new OffscreenCanvas(w, h);
+    // a plain canvas, not OffscreenCanvas: macOS WebKit before Safari 16.4 has no 2D OffscreenCanvas
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
     const ctx = cv.getContext('2d')!;
     const img = ctx.createImageData(w, h);
     const out = new Uint32Array(img.data.buffer), pal = this.palette;
     for (let i = 0; i < w * h; i++) { const v = data[i]; out[i] = v < 16 ? pal[v] : 0; }
     ctx.putImageData(img, 0, 0);
-    return new Uint8Array(await (await cv.convertToBlob({ type: 'image/png' })).arrayBuffer());
+    const blob = await new Promise<Blob | null>((res) => cv.toBlob(res, 'image/png'));
+    if (!blob) throw new Error('PNG encoding failed');
+    return new Uint8Array(await blob.arrayBuffer());
   }
 
   /** The cropped part of a framebuffer, for comparing frames. */

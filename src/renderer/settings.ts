@@ -76,9 +76,12 @@ export const DEFAULT_SETTINGS: Settings = {
   ui: { debugger: false, lastDir: '', recent: [], heatmap: false, history: true, binaryMonitor: false, dbgBottom: 0, frameDir: '', frameSkipMoved: true, frameAutoCrop: false, frameIsolate: 1 },
 };
 
+// a copy of plain settings data (not structuredClone: macOS WebKit before Safari 15.4 lacks it and startup failed there)
+const copy = <T>(v: T): T => JSON.parse(JSON.stringify(v));
+
 function merge<T>(def: T, val: any): T {
-  if (val === undefined || val === null) return structuredClone(def);
-  if (Array.isArray(def) || typeof def !== 'object' || def === null) return (typeof val === typeof def ? val : structuredClone(def)) as T;
+  if (val === undefined || val === null) return copy(def);
+  if (Array.isArray(def) || typeof def !== 'object' || def === null) return (typeof val === typeof def ? val : copy(def)) as T;
   const out: any = {};
   for (const k of Object.keys(def as any)) out[k] = merge((def as any)[k], val[k]);
   return out;

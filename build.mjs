@@ -19,7 +19,9 @@ const common = { define: { __APP_VERSION__: JSON.stringify(version) }, bundle: t
 const builds = [
   { ...common, entryPoints: ['src/main/main.ts'], outfile: 'dist/main/main.js', platform: 'node', format: 'cjs', external: ['electron'] },
   { ...common, entryPoints: ['src/main/preload.ts'], outfile: 'dist/main/preload.js', platform: 'node', format: 'cjs', external: ['electron'] },
-  { ...common, entryPoints: ['src/renderer/app.ts'], outfile: 'dist/renderer/app.js', platform: 'browser', format: 'iife' },
+  // the Mac build runs in the system WebKit, which can be as old as Safari 14 (macOS 10.15/11 not updated):
+  // let esbuild convert newer syntax for it
+  { ...common, entryPoints: ['src/renderer/app.ts'], outfile: 'dist/renderer/app.js', platform: 'browser', format: 'iife', target: ['es2020', 'safari14', 'chrome90'] },
 ];
 if (tests) builds.push({ ...common, entryPoints: ['tools/headless.ts'], outfile: 'dist/tests/headless.js', platform: 'node', format: 'cjs' });
 
