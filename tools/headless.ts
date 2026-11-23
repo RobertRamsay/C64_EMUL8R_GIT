@@ -15,6 +15,7 @@ import { SPRITES_ONLY_KEY } from '../src/core/vic';
 import { serializeState, deserializeState } from '../src/core/snapshot';
 import { PALETTES, parseVpl } from '../src/core/palettes';
 import { toVpl } from '../src/renderer/ui/paletteEditor';
+import { engineInfo, chromiumYear } from '../src/renderer/perf';
 import { isMovedOnly, findActors } from '../src/core/framediff';
 
 const candidates = [
@@ -542,6 +543,19 @@ if (roms.dos1541) {
   check('palette editor: snapshot without edits clears them', c.uci.palette === null);
   const back = parseVpl(toVpl(PALETTES.Pepto));
   check('palette editor: .vpl save/load round trip', !!back && back.join() === PALETTES.Pepto.join(), String(back));
+}
+
+// ---- web engine check (pure)
+{
+  const modern = { structuredClone: () => 0, OffscreenCanvas: function () {} };
+  const wv = (v: number) => `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${v}.0.0.0 Safari/537.36 Edg/${v}.0.0.0`;
+  const cur = engineInfo(wv(157), modern), old = engineInfo(wv(96), {}), mid = engineInfo(wv(124), modern);
+  check('engine: current WebView2 is fine', !cur.old && cur.name === 'Microsoft Edge WebView2' && cur.chromium === 157, JSON.stringify(cur));
+  check('engine: WebView2 96 is old (no structuredClone)', old.old && old.chromium === 96 && old.year === 2021 && old.missing.includes('structuredClone'), JSON.stringify(old));
+  check('engine: WebView2 below the threshold is old', mid.old && mid.missing.length === 0, JSON.stringify(mid));
+  const mac = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)';
+  check('engine: old macOS WebKit is flagged by missing features', engineInfo(mac, {}).old && engineInfo(mac, {}).chromium === null && !engineInfo(mac, modern).old);
+  check('engine: Chromium release years', chromiumYear(98) === 2022 && chromiumYear(120) === 2023 && chromiumYear(157) === 2026, `${chromiumYear(98)} ${chromiumYear(120)} ${chromiumYear(157)}`);
 }
 
 // ---- frame capture: sprites that only moved (pure)

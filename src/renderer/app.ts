@@ -6,6 +6,7 @@ import { C64, StopReason } from '../core/c64';
 import { C64_COLOR_NAMES, PALETTES, parseVpl } from '../core/palettes';
 import { cssColour } from './ui/spriteEditor';
 import { PaletteEditor } from './ui/paletteEditor';
+import { engineInfo, slowExplanation, type EngineInfo } from './perf';
 import { attachMedia, detectMedia, parseSid, startSid, SidInfo, MEDIA_EXTENSIONS } from '../core/loaders';
 import { D64 } from '../core/d64';
 import { parseLabels } from '../core/monitor';
@@ -49,6 +50,12 @@ export class App {
   private lastUi = 0;
   private lastStatus = 0;
   private speedFrames = 0;
+  /** time spent emulating and drawing this second, and the per-frame average of the last one */
+  private emuMs = 0;
+  private msPerFrame = 0;
+  /** seconds in a row below full speed (not warping): after a few the speed readout explains why */
+  private slowSecs = 0;
+  readonly engine: EngineInfo = engineInfo();
   private speedTime = 0;
   speedPct = 0;
   private rewind: any[] = [];
@@ -101,6 +108,41 @@ export class App {
     if (this.settings.ui.binaryMonitor) void this.startBinaryMonitor();
     this.handleLaunch(await window.host.args());
     window.host.onLaunchArgs((a) => this.handleLaunch(a));
+    this.engineNotice();
+  }
+
+  /** Once per engine version: say so if the system web engine is old, and how to update it. */
+  private engineNotice(): void {
+    const e = this.engine;
+    if (!e.old || this.settings.ui.engineNotice === e.key || (window as any).C64EMUL8R_NO_NOTICE) return;
+    const url = 'https://developer.microsoft.com/microsoft-edge/webview2/';
+    const win = e.chromium !== null;
+    const close = (remember: boolean) => {
+      if (remember) { this.settings.ui.engineNotice = e.key; this.persist(); }
+      back.remove();
+    };
+    const body = win ? [
+      h('p', {}, `C64EMUL8R runs inside ${e.name}, and the one on this PC is version ${e.chromium}${e.year ? `, from about ${e.year}` : ''}. ` +
+        'Microsoft normally keeps it up to date through the Edge updater, so it may have stopped updating if Edge was removed.'),
+      h('p', {}, 'An old engine runs the emulator noticeably slower (the whole C64 runs on one CPU core), and it misses security fixes. ' +
+        'You can update it without installing the Edge browser: download the "Evergreen Standalone Installer" (x64) from Microsoft:'),
+      h('p', {}, h('code', {}, url)),
+      h('p', {}, 'Without the Edge updater it will not update itself, so run that installer again now and then.'),
+    ] : [
+      h('p', {}, `C64EMUL8R runs inside ${e.name}, and the one on this Mac is out of date (it lacks ${e.missing.join(', ')}).`),
+      h('p', {}, 'It is updated together with Safari: use Software Update in System Settings (or System Preferences) to get the latest Safari your macOS supports. ' +
+        'An old engine runs the emulator slower and misses security fixes.'),
+    ];
+    const back = h('div', { class: 'modal-back' },
+      h('div', { class: 'modal notice' },
+        h('div', { class: 'modal-head' }, h('h2', {}, 'Your system web engine is out of date'), btn('', { icon: 'close', cls: 'icon small', onClick: () => close(false) })),
+        h('div', { class: 'modal-page' }, ...body),
+        h('div', { class: 'modal-foot' },
+          win ? btn('Copy link', { onClick: () => { void navigator.clipboard?.writeText(url).then(() => toast('Link copied')); } }) : '',
+          btn('Remind me next time', { onClick: () => close(false) }),
+          btn("OK, don't show again", { cls: 'primary', onClick: () => close(true) }))));
+    back.addEventListener('close', () => close(false));
+    document.body.append(back);
   }
 
   // --------------------------------------------------------------- ROMs
@@ -1251,6 +1293,7 @@ export class App {
     const dt = Math.min(100, now - (this.lastTime || now));
     this.lastTime = now;
     if (this.running && !this.ultimate.isOpen) {
+      const t0 = performance.now();
       const fps = this.c64.fps;
       const warp = (this.warpActive = this.isWarping());
       if (warp) {
@@ -1274,10 +1317,13 @@ export class App {
         for (let i = 0; i < n; i++) if (this.runOneFrame(true)) break;
       }
       this.video.draw(this.c64.vic.framebuffer);
+      this.emuMs += performance.now() - t0;
     }
     if (now - this.speedTime > 1000) {
       this.speedPct = Math.round((this.speedFrames / ((now - this.speedTime) / 1000)) / this.c64.fps * 100);
-      this.speedFrames = 0; this.speedTime = now;
+      if (this.speedFrames) this.msPerFrame = this.emuMs / this.speedFrames;
+      this.slowSecs = this.running && !this.warpActive && !this.ultimate.isOpen && this.speedPct < 93 ? this.slowSecs + 1 : 0;
+      this.speedFrames = 0; this.speedTime = now; this.emuMs = 0;
     }
     if (now - this.lastStatus > 200) { this.lastStatus = now; this.updateStatus(); }
     if (this.settings.ui.debugger && this.running && now - this.lastUi > 100) { this.lastUi = now; this.debugger.refresh(false); }
@@ -1310,7 +1356,10 @@ export class App {
     const t = this.c64.tape;
     document.getElementById('st-tape')!.textContent = t.tap ? `▣ ${t.playing ? '▶' : '■'} ${String(t.counter).padStart(3, '0')}` : '';
     document.getElementById('st-joy')!.textContent = `J1: ${this.portLabel(1)} | J2: ${this.portLabel(2)}`;
-    document.getElementById('st-speed')!.textContent = this.running ? `${this.speedPct}%` : '';
+    const sp = document.getElementById('st-speed')!, slow = this.running && this.slowSecs >= 3;
+    sp.textContent = this.running ? `${this.speedPct}%${slow ? ' \u26a0' : ''}` : '';
+    sp.classList.toggle('slow', slow);
+    sp.title = slow ? slowExplanation(this, this.msPerFrame, 1000 / this.c64.fps, this.engine) : 'Emulation speed';
     // the speed button shows what the CPU runs at now (a program may have changed it through $D030/$D031)
     const mhz = this.c64.cpuMhz, lab = this.speedBtn?.querySelector('span');
     if (lab && lab.textContent !== `${mhz} MHz`) lab.textContent = `${mhz} MHz`;

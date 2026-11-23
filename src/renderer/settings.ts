@@ -54,7 +54,7 @@ export interface Settings {
   };
   ultimate: { browseDir: string };
   /** dbgBottom: height of the debugger's bottom panel in px (0 = default) */
-  ui: { debugger: boolean; lastDir: string; recent: string[]; heatmap: boolean; history: boolean; binaryMonitor: boolean; dbgBottom: number; frameDir: string; frameSkipMoved: boolean; frameAutoCrop: boolean; frameIsolate: number };
+  ui: { debugger: boolean; lastDir: string; recent: string[]; heatmap: boolean; history: boolean; binaryMonitor: boolean; dbgBottom: number; frameDir: string; frameSkipMoved: boolean; frameAutoCrop: boolean; frameIsolate: number; engineNotice: string };
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -73,7 +73,7 @@ export const DEFAULT_SETTINGS: Settings = {
     autofireHz: 8,
   },
   ultimate: { browseDir: '' },
-  ui: { debugger: false, lastDir: '', recent: [], heatmap: false, history: true, binaryMonitor: false, dbgBottom: 0, frameDir: '', frameSkipMoved: true, frameAutoCrop: false, frameIsolate: 1 },
+  ui: { debugger: false, lastDir: '', recent: [], heatmap: false, history: true, binaryMonitor: false, dbgBottom: 0, frameDir: '', frameSkipMoved: true, frameAutoCrop: false, frameIsolate: 1, engineNotice: '' },
 };
 
 // a copy of plain settings data (not structuredClone: macOS WebKit before Safari 15.4 lacks it and startup failed there)
