@@ -12,6 +12,7 @@ import { SidRecorder, buildPsid, toTicks } from '../src/core/sidrecord';
 import { WavRecorder } from '../src/core/wav';
 import { decodeSprite, encodeSprite, getPixel, readSpd, readSpriteFile, setPixel, spritesToAsm, transformSprite, writeSpd } from '../src/core/sprites';
 import { SPRITES_ONLY_KEY } from '../src/core/vic';
+import { isMovedOnly } from '../src/core/framediff';
 
 const candidates = [
   process.env.C64_ROMS,
@@ -516,6 +517,26 @@ if (roms.dos1541) {
   const wav = rec.encode(false), wv = new DataView(wav.buffer);
   let peak = 0; for (let o = 44; o < wav.length; o += 2) peak = Math.max(peak, Math.abs(wv.getInt16(o, true)));
   check('WAV records SID output', Math.abs(rec.seconds - 0.5) < 0.02 && peak > 1000, `${rec.seconds.toFixed(3)} s, peak ${peak}`);
+}
+
+// ---- frame capture: sprites that only moved (pure)
+{
+  const W = 40, H = 30, E = SPRITES_ONLY_KEY;
+  const frame = (x: number, y: number, col = 2, notch = false) => {
+    const f = new Uint8Array(W * H).fill(E);
+    for (let r = 0; r < 5; r++) for (let c = 0; c < 6; c++) f[(y + r) * W + x + c] = col;
+    if (notch) f[(y + 2) * W + x + 3] = E;
+    f[(y + 1) * W + x + 1] = 1; // an eye, so the shape isn't symmetric
+    return f;
+  };
+  check('moved-only: same sprite elsewhere', isMovedOnly(frame(3, 4), frame(20, 15), W, H, E));
+  check('moved-only: shape change is kept', !isMovedOnly(frame(3, 4), frame(5, 4, 2, true), W, H, E));
+  check('moved-only: colour change is kept', !isMovedOnly(frame(3, 4), frame(5, 4, 7), W, H, E));
+  check('moved-only: unmoved change is kept', !isMovedOnly(frame(3, 4), frame(3, 4, 2, true), W, H, E));
+  const pair = (dx: number) => { const f = frame(3, 4); const g = frame(20 + dx, 4); for (let i = 0; i < f.length; i++) if (g[i] !== E) f[i] = g[i]; return f; };
+  check('moved-only: two sprites moving apart are kept', !isMovedOnly(pair(0), pair(4), W, H, E));
+  check('moved-only: empty frames are not "moved"', !isMovedOnly(new Uint8Array(W * H).fill(E), new Uint8Array(W * H).fill(E), W, H, E));
+  check('moved-only: works with a background colour', isMovedOnly(frame(3, 4).map((v) => (v === E ? 6 : v)), frame(9, 9).map((v) => (v === E ? 6 : v)), W, H, 6));
 }
 
 // ---- sprite editor helpers (pure)

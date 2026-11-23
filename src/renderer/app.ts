@@ -11,6 +11,8 @@ import { parseLabels } from '../core/monitor';
 import { BinaryMonitor } from '../core/binmon';
 import { deserializeState, serializeState } from '../core/snapshot';
 import { WAV_MAX_SECONDS, WavRecorder } from '../core/wav';
+import { isMovedOnly } from '../core/framediff';
+import { SPRITES_ONLY_KEY } from '../core/vic';
 import { AudioOut } from './audio';
 import { Video } from './video';
 import { InputManager, DEVICE_NAMES } from './input';
@@ -294,6 +296,11 @@ export class App {
       menuItem('Save screenshot (PNG)…', () => this.screenshot(), '', 'camera'),
       menuItem(this.frameCap ? `Stop frame capture (${this.frameCap.saved} saved)` : 'Quick frame capture (changed frames only)', () => void this.toggleFrameCapture(), 'Ctrl+F', 'camera'),
       menuItem('Frame capture folder…', () => void this.chooseFrameDir(), '', 'load'),
+      menuItem(`${this.settings.ui.frameSkipMoved ? '\u2611' : '\u2610'} Skip frames where sprites only moved (sprites-only view)`, () => {
+        this.settings.ui.frameSkipMoved = !this.settings.ui.frameSkipMoved;
+        this.persist();
+        toast(this.settings.ui.frameSkipMoved ? 'Sprites-only captures skip frames where the sprites only moved, keeping shape and colour changes' : 'Sprites-only captures save moved sprites too');
+      }),
       this.bgCaptureRow(),
       h('hr'),
       ...(['all', 'background', 'sprites'] as SpriteView[]).map((v) =>
@@ -1039,7 +1046,7 @@ export class App {
 
   /** Quick frame capture: every frame that differs from the last saved one becomes a PNG. */
   frameCap: {
-    dir: string; start: number; prev: Uint8Array | null; saved: number; same: number;
+    dir: string; start: number; prev: Uint8Array | null; saved: number; same: number; moved: number;
     pending: number; dropped: number; failed: string; chain: Promise<void>;
   } | null = null;
 
@@ -1060,7 +1067,7 @@ export class App {
     const t = new Date(), p2 = (n: number) => String(n).padStart(2, '0');
     const stamp = `${t.getFullYear()}-${p2(t.getMonth() + 1)}-${p2(t.getDate())} ${p2(t.getHours())}${p2(t.getMinutes())}${p2(t.getSeconds())}`;
     const dir = await window.host.joinPath(base, `C64 frames ${stamp}`);
-    this.frameCap = { dir, start: this.c64.frameCount, prev: null, saved: 0, same: 0, pending: 0, dropped: 0, failed: '', chain: Promise.resolve() };
+    this.frameCap = { dir, start: this.c64.frameCount, prev: null, saved: 0, same: 0, moved: 0, pending: 0, dropped: 0, failed: '', chain: Promise.resolve() };
     this.snapBtn.classList.add('rec');
     toast(`Capturing changed frames to ${dir}${this.running ? '' : ' - resume the machine to capture'} (Ctrl+F stops)`, false, 3500);
     this.captureFrame(); // the picture on screen now is the first frame
@@ -1072,7 +1079,7 @@ export class App {
     this.frameCap = null;
     this.snapBtn.classList.remove('rec');
     await cap.chain;
-    const extra = [cap.same ? `${cap.same} unchanged skipped` : '', cap.dropped ? `${cap.dropped} dropped, the disk could not keep up` : ''].filter(Boolean).join(', ');
+    const extra = [cap.same ? `${cap.same} unchanged skipped` : '', cap.moved ? `${cap.moved} only moved skipped` : '', cap.dropped ? `${cap.dropped} dropped, the disk could not keep up` : ''].filter(Boolean).join(', ');
     toast(cap.failed ? `Frame capture failed: ${cap.failed}` : `Saved ${cap.saved} frame${cap.saved === 1 ? '' : 's'}${extra ? ` (${extra})` : ''} to ${cap.dir}`, !!cap.failed, 5000);
   }
 
@@ -1084,6 +1091,12 @@ export class App {
       let same = true;
       for (let i = 0; i < cur.length; i++) if (cur[i] !== prev[i]) { same = false; break; }
       if (same) { cap.same++; return; }
+      // sprites-only view: the same sprites, just somewhere else
+      const v = this.c64.vic;
+      if (v.spritesOnly && this.settings.ui.frameSkipMoved
+        && isMovedOnly(prev, cur, this.video.crop.w, this.video.crop.h, v.bgOverride >= 0 ? v.bgOverride : SPRITES_ONLY_KEY)) {
+        cap.moved++; cap.prev = cur; return;
+      }
     }
     cap.prev = cur;
     if (cap.pending >= 250) { cap.dropped++; return; } // the encoder can't keep up (warp): don't eat all memory
