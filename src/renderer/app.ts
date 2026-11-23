@@ -5,6 +5,7 @@ import './tauriHost'; // provides window.host in the Tauri build
 import { C64, StopReason } from '../core/c64';
 import { C64_COLOR_NAMES, PALETTES, parseVpl } from '../core/palettes';
 import { cssColour } from './ui/spriteEditor';
+import { PaletteEditor } from './ui/paletteEditor';
 import { attachMedia, detectMedia, parseSid, startSid, SidInfo, MEDIA_EXTENSIONS } from '../core/loaders';
 import { D64 } from '../core/d64';
 import { parseLabels } from '../core/monitor';
@@ -84,7 +85,8 @@ export class App {
     this.c64.uci.basePalette = () => this.settingsPaletteHex().flatMap((h) => {
       const v = parseInt(h, 16); return [(v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff];
     });
-    this.c64.uci.onPalette = () => this.applyVideoSettings();
+    // only the colours change: no re-layout, so dragging a colour picker stays smooth
+    this.c64.uci.onPalette = () => { this.video.setPalette(this.screenPaletteHex()); this.video.redraw(); };
     this.buildToolbar();
     document.getElementById('brand-ver')!.textContent = 'v' + __APP_VERSION__;
     document.getElementById('st-version')!.textContent = 'v' + __APP_VERSION__;
@@ -294,6 +296,7 @@ export class App {
       menuItem('Load snapshot file…', () => this.openDialog(false, [{ name: 'Snapshot', extensions: ['c64s'] }]), '', 'load'),
       h('hr'),
       menuItem('Save screenshot (PNG)…', () => this.screenshot(), '', 'camera'),
+      menuItem(this.c64.uci.palette ? 'Palette editor… (edited)' : 'Palette editor…', () => PaletteEditor.toggle(this), '', 'settings'),
       menuItem(this.frameCap ? `Stop frame capture (${this.frameCap.saved} saved)` : 'Quick frame capture (changed frames only)', () => void this.toggleFrameCapture(), 'Ctrl+F', 'camera'),
       menuItem('Frame capture folder…', () => void this.chooseFrameDir(), '', 'load'),
       menuItem(`${this.settings.ui.frameSkipMoved ? '\u2611' : '\u2610'} Skip frames where sprites only moved (sprites-only view)`, () => {

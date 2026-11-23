@@ -9,6 +9,7 @@ import { Monitor, historyLines, petsciiChar } from '../../core/monitor';
 import { C64_COLOR_NAMES } from '../../core/palettes';
 import { btn, clear, h, toast } from './dom';
 import { SpriteEditor, colourPicker, exportMenu, importSprites, vicColours } from './spriteEditor';
+import { PaletteEditor } from './paletteEditor';
 import type { SpriteColours } from '../../core/sprites';
 import type { SpriteSeen } from '../../core/vic';
 import { SidRecorder, buildPsid } from '../../core/sidrecord';
@@ -468,7 +469,7 @@ export class DebuggerUI {
         if (!isNaN(n)) { this.app.c64.addBreakpoint('raster', n); toast(`Raster breakpoint at line ${n}`); rl.value = ''; }
       }
     });
-    el.append(h('div', { class: 'panel-head' }, h('h3', {}, 'VIC-II'), h('span', { class: 'tb-spacer' }), 'show:', showSpr, showBg, h('span', { class: 'hint' }, 'break at line'), rl), this.els.vic);
+    el.append(h('div', { class: 'panel-head' }, h('h3', {}, 'VIC-II'), btn('Palette…', { cls: 'small', title: 'Edit the 16 colours as RGB', onClick: () => PaletteEditor.toggle(this.app) }), h('span', { class: 'tb-spacer' }), 'show:', showSpr, showBg, h('span', { class: 'hint' }, 'break at line'), rl), this.els.vic);
   }
 
   private sw(i: number): string {

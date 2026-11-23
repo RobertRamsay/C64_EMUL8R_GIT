@@ -25,6 +25,15 @@ export class UltimateCommandInterface {
   basePalette: () => number[] = () => new Array(48).fill(0);
   onPalette: (rgb: number[] | null) => void = () => {};
 
+  /** Set (48 RGB bytes) or clear the runtime palette, from the host or a snapshot. Notifies only on a change. */
+  setPalette(p: number[] | null): void {
+    const next = p ? p.slice(0, 48) : null;
+    const cur = this.palette;
+    if (cur === next || (cur && next && cur.length === next.length && cur.every((v, i) => v === next[i]))) return;
+    this.palette = next;
+    this.onPalette(next);
+  }
+
   reset(): void { this.cmd = []; this.resp = []; this.stat = []; this.state = 0; this.error = false; }
 
   read(addr: number): number {

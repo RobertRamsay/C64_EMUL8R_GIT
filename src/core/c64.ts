@@ -1090,6 +1090,7 @@ export class C64 implements CpuBus, VicMemory {
       tape: this.tape.saveState(),
       iec: { ...this.iec },
       turboRegs: { mhz: this.regMhz, badlines: this.regBadlines, on: this.regTurboOn },
+      palette: this.uci.palette ? this.uci.palette.slice() : null,
     };
   }
 
@@ -1111,6 +1112,8 @@ export class C64 implements CpuBus, VicMemory {
     Object.assign(this.iec, s.iec);
     const t = s.turboRegs ?? { mhz: -1, badlines: null, on: true };
     this.regMhz = t.mhz; this.regBadlines = t.badlines; this.regTurboOn = t.on;
+    // the runtime palette (Ultimate SET_PALETTE or the palette editor); older snapshots have none
+    if ('palette' in s) this.uci.setPalette(s.palette ? Array.from(s.palette as number[]) : null);
     this.applySpeed();
     this.updateMap();
   }

@@ -12,6 +12,9 @@ import { SidRecorder, buildPsid, toTicks } from '../src/core/sidrecord';
 import { WavRecorder } from '../src/core/wav';
 import { decodeSprite, encodeSprite, getPixel, readSpd, readSpriteFile, setPixel, spritesToAsm, transformSprite, writeSpd } from '../src/core/sprites';
 import { SPRITES_ONLY_KEY } from '../src/core/vic';
+import { serializeState, deserializeState } from '../src/core/snapshot';
+import { PALETTES, parseVpl } from '../src/core/palettes';
+import { toVpl } from '../src/renderer/ui/paletteEditor';
 import { isMovedOnly, findActors } from '../src/core/framediff';
 
 const candidates = [
@@ -517,6 +520,28 @@ if (roms.dos1541) {
   const wav = rec.encode(false), wv = new DataView(wav.buffer);
   let peak = 0; for (let o = 44; o < wav.length; o += 2) peak = Math.max(peak, Math.abs(wv.getInt16(o, true)));
   check('WAV records SID output', Math.abs(rec.seconds - 0.5) < 0.02 && peak > 1000, `${rec.seconds.toFixed(3)} s, peak ${peak}`);
+}
+
+// ---- runtime palette: kept in snapshots, VICE .vpl round trip
+{
+  const c = machine(false);
+  let notified = 0;
+  c.uci.onPalette = () => notified++;
+  const pal = Array.from({ length: 48 }, (_, i) => (i * 5) & 255);
+  c.uci.setPalette(pal);
+  c.uci.setPalette(pal.slice()); // same colours: no second notification
+  const snap = deserializeState(serializeState(c.saveState()));
+  c.uci.setPalette(null);
+  c.loadState(snap);
+  check('palette editor: snapshot keeps the edited palette', !!c.uci.palette && c.uci.palette.every((v, i) => v === pal[i]) && notified === 3, `notified ${notified}`);
+  const old = c.saveState(); delete old.palette;
+  c.loadState(old);
+  check('palette editor: older snapshots leave the palette alone', !!c.uci.palette && c.uci.palette[5] === pal[5]);
+  const cleared = c.saveState(); cleared.palette = null;
+  c.loadState(cleared);
+  check('palette editor: snapshot without edits clears them', c.uci.palette === null);
+  const back = parseVpl(toVpl(PALETTES.Pepto));
+  check('palette editor: .vpl save/load round trip', !!back && back.join() === PALETTES.Pepto.join(), String(back));
 }
 
 // ---- frame capture: sprites that only moved (pure)
