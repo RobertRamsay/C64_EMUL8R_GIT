@@ -97,8 +97,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .menu button .kbd { margin-left: auto; color: var(--muted); font-size: 11px; }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
 .menu .bgcap { padding: 4px 10px 6px; }
-.menu .isorow { display: flex; align-items: center; gap: 6px; padding: 4px 10px 6px 34px; color: var(--muted); font-size: 12px; }
-.menu .isorow select { background: var(--bg0); color: var(--silver-hi); border: 1px solid var(--line2); border-radius: 4px; font-size: 12px; padding: 1px 4px; }
+.menu .isorow { display: flex; align-items: center; gap: 6px; padding: 4px 10px 6px 34px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.menu .isorow select { flex: none; width: auto; background: var(--bg0); color: var(--silver-hi); border: 1px solid var(--line2); border-radius: 4px; font-size: 12px; padding: 1px 4px; }
 .menu .bgcap-lab { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
 .menu .bgcap-row { display: grid; grid-template-columns: repeat(8, 18px) auto; grid-template-rows: 18px 18px; gap: 3px; align-items: center; }
 .menu .bgcap-sw { width: 18px; height: 18px; border-radius: 3px; border: 1px solid rgba(255, 255, 255, .25); cursor: pointer; box-sizing: border-box; }

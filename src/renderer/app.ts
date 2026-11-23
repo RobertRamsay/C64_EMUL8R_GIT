@@ -1041,7 +1041,7 @@ export class App {
     }, ...opts.map(([v, l]) => h('option', { value: String(v), selected: v === this.settings.ui.frameIsolate }, l))) as HTMLSelectElement;
     sel.value = String(this.settings.ui.frameIsolate);
     return h('div', { class: 'isorow', title: 'With auto-crop: shapes further apart than this are separate actors, saved as frame_N_actor1..8.png. Actors keep their number as they move. Shapes this close or closer count as one actor.' },
-      'Isolate actors, joining gaps up to', sel);
+      'Isolate actors, join gaps up to', sel);
   }
 
   /** "Bkg colour on capture" swatches for the camera menu; they don't close the menu, so you can try colours on the fly. */
