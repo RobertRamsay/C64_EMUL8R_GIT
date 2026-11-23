@@ -475,7 +475,8 @@ export class BinaryMonitor {
   /** Display get: the whole visible frame as 8-bit palette indices. */
   private display(): number[] {
     const vic = this.host.c64.vic;
-    const fb = vic.framebuffer;
+    // sprites-only mode marks empty pixels as 16: send those as black
+    const fb = vic.spritesOnly ? vic.framebuffer.map((v) => v & 15) : vic.framebuffer;
     const width = 384, height = fb.length / width;
     // the 320x200 screen starts at x = 24 (+8 in the buffer) and line 51
     const xOff = 32, yOff = 51 - vic.model.firstVisibleLine;

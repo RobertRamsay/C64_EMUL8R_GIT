@@ -39,6 +39,8 @@ export const NTSC: VicModel = {
 };
 
 export const SCREEN_W = 384;
+/** Framebuffer index for "no sprite here" in sprites-only mode (palette entries are 0..15). */
+export const SPRITES_ONLY_KEY = 16;
 /** first visible cycle (x = -8) and last (x = 375) */
 const FIRST_VIS_CYCLE = 13;
 const LAST_VIS_CYCLE = 60;
@@ -100,6 +102,8 @@ export class VICII {
   private lineColor = new Uint8Array(SCREEN_W);
   private lineFg = new Uint8Array(SCREEN_W);
   private lineBorder = new Uint8Array(SCREEN_W);
+  /** sprite colour per pixel of the current line for sprites-only mode (0xff = none) */
+  private lineSpr = new Uint8Array(SCREEN_W).fill(0xff);
   // output
   framebuffer = new Uint8Array(SCREEN_W * 312); // color indices
   frameReady = false;
@@ -111,6 +115,13 @@ export class VICII {
   /** Debug: disable sprite/background rendering layers. */
   showSprites = true;
   showBackground = true;
+  /**
+   * Display only: draw just the sprites, with everything else (graphics, background
+   * colour and border) as SPRITES_ONLY_KEY. Collisions, priorities and IRQs are
+   * computed as usual; sprites behind graphics are drawn anyway, sprites under the
+   * border stay hidden.
+   */
+  spritesOnly = false;
   /** Skip pixel output (timing, fetches, IRQs and border logic still run). Used by warp. */
   skipRender = false;
 
@@ -563,6 +574,11 @@ export class VICII {
     const lc = this.lineColor, lb = this.lineBorder;
     const row = (this.raster - this.model.firstVisibleLine) * SCREEN_W;
     const fb = this.framebuffer;
+    if (this.spritesOnly) {
+      const ls = this.lineSpr;
+      for (let i = 0; i < SCREEN_W; i++) { fb[row + i] = lb[i] !== 0xff || ls[i] === 0xff ? SPRITES_ONLY_KEY : ls[i]; ls[i] = 0xff; }
+      return;
+    }
     for (let i = 0; i < SCREEN_W; i++) fb[row + i] = lb[i] !== 0xff ? lb[i] : lc[i];
   }
 
@@ -613,6 +629,7 @@ export class VICII {
       this.spBgColl |= hits;
     }
     // the winner's priority bit decides against background foreground
+    if (this.spritesOnly) { this.lineSpr[idx] = firstCol; return; }
     if (!this.showSprites || (fg && r[0x1b] & (1 << first))) return;
     this.lineColor[idx] = firstCol;
   }

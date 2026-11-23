@@ -55,6 +55,8 @@ function mix(a: number, b: number, t: number): number {
   return (0xff000000 | (bl << 16) | (g << 8) | r) >>> 0;
 }
 
+const KEY_A = 0xff3a3330, KEY_B = 0xff2a2522; // ABGR: dim blue-greys
+
 export class Video {
   private ctx: CanvasRenderingContext2D;
   private img!: ImageData;
@@ -132,6 +134,28 @@ export class Video {
     }
   }
 
+  /**
+   * A PNG of cropped colour indices (from cropOf) at 1 C64 pixel per pixel.
+   * Sprites-only empty pixels are fully transparent.
+   */
+  async png(data: Uint8Array, w: number, h: number): Promise<Uint8Array> {
+    const cv = new OffscreenCanvas(w, h);
+    const ctx = cv.getContext('2d')!;
+    const img = ctx.createImageData(w, h);
+    const out = new Uint32Array(img.data.buffer), pal = this.palette;
+    for (let i = 0; i < w * h; i++) { const v = data[i]; out[i] = v < 16 ? pal[v] : 0; }
+    ctx.putImageData(img, 0, 0);
+    return new Uint8Array(await (await cv.convertToBlob({ type: 'image/png' })).arrayBuffer());
+  }
+
+  /** The cropped part of a framebuffer, for comparing frames. */
+  cropOf(fb: Uint8Array, into?: Uint8Array): Uint8Array {
+    const { x, y, w, h } = this.crop;
+    const out = into && into.length === w * h ? into : new Uint8Array(w * h);
+    for (let row = 0; row < h; row++) out.set(fb.subarray((y + row) * SCREEN_W + x, (y + row) * SCREEN_W + x + w), row * w);
+    return out;
+  }
+
   setBlend(mode: BlendMode): void {
     this.blend = mode;
     this.factor = 0;
@@ -145,7 +169,11 @@ export class Video {
     let o = 0;
     for (let row = 0; row < h; row++) {
       let i = (y + row) * SCREEN_W + x;
-      for (let col = 0; col < w; col++) out[o++] = pal[fb[i++] & 15];
+      for (let col = 0; col < w; col++) {
+        const v = fb[i++];
+        // sprites-only mode: show empty pixels as a dim 8x8 checkerboard
+        out[o++] = v < 16 ? pal[v] : (((x + col) ^ (y + row)) & 8 ? KEY_A : KEY_B);
+      }
     }
     if (this.beamLine >= 0) {
       const r = this.beamLine - y;

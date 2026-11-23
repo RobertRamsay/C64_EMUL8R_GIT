@@ -322,6 +322,7 @@ async fn write_file(request: Request<'_>) -> Result<(), String> {
     let path = request.headers().get("x-path").and_then(|v| v.to_str().ok()).ok_or("missing x-path")?;
     let path = percent_decode(path);
     let InvokeBody::Raw(data) = request.body() else { return Err("expected raw data".into()) };
+    if let Some(dir) = Path::new(&path).parent() { let _ = fs::create_dir_all(dir); }
     fs::write(&path, data).map_err(|e| e.to_string())
 }
 

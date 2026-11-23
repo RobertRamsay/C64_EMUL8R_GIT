@@ -223,7 +223,7 @@ ipcMain.handle('file:save', async (_e, defaultName: string, data: Uint8Array, fi
   return r.filePath;
 });
 
-ipcMain.handle('file:write', async (_e, p: string, data: Uint8Array) => { await fs.writeFile(p, data); });
+ipcMain.handle('file:write', async (_e, p: string, data: Uint8Array) => { await fs.mkdir(dirname(p), { recursive: true }); await fs.writeFile(p, data); });
 
 ipcMain.handle('dir:choose', async (_e, defaultPath?: string) => {
   if (!win) return null;

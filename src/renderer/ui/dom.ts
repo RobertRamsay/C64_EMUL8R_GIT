@@ -35,6 +35,7 @@ const ICONS: Record<string, string> = {
   ultimate: '<path d="M12 3l9 9-9 9-9-9z"/><path d="M12 8l4 4-4 4-4-4z"/>',
   camera: '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
   sprite: '<path d="M6 9h12v6H6z"/><path d="M8 9V6M16 9V6M6 15l-2 3M18 15l2 3M10 18h4"/><circle cx="9.5" cy="12" r=".9"/><circle cx="14.5" cy="12" r=".9"/>',
+  spriteonly: '<path d="M6 9h12v6H6z"/><path d="M8 9V6M16 9V6M6 15l-2 3M18 15l2 3M10 18h4"/><circle cx="9.5" cy="12" r=".9"/><circle cx="14.5" cy="12" r=".9"/><path d="M2 2h3M19 2h3M2 22h3M19 22h3M2 2v3M22 2v3M2 22v-3M22 22v-3"/>',
   spriteoff: '<path d="M6 9h12v6H6z"/><path d="M8 9V6M16 9V6M6 15l-2 3M18 15l2 3M10 18h4"/><path d="M3 3l18 18"/>',
   save: '<path d="M5 3h11l3 3v15H5z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/>',
   load: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 21h16"/>',

@@ -20,6 +20,11 @@ import { DebuggerUI } from './ui/debugger';
 import { UltimateMenu } from './ui/ultimate';
 import { DEMOS } from './demos';
 
+type SpriteView = 'all' | 'background' | 'sprites';
+const SPRITE_VIEW_NEXT: Record<SpriteView, SpriteView> = { all: 'background', background: 'sprites', sprites: 'all' };
+const SPRITE_VIEW_LABEL: Record<SpriteView, string> = { all: 'Show everything', background: 'Hide sprites (background only)', sprites: 'Sprites only (hide the background)' };
+const SPRITE_VIEW_ICON: Record<SpriteView, string> = { all: 'sprite', background: 'spriteoff', sprites: 'spriteonly' };
+
 export class App {
   c64 = new C64();
   settings!: Settings;
@@ -54,6 +59,7 @@ export class App {
   private pauseBtn!: HTMLButtonElement;
   private warpBtn!: HTMLButtonElement;
   private sprBtn!: HTMLButtonElement;
+  private snapBtn!: HTMLButtonElement;
   private keysBtn!: HTMLButtonElement;
   private dbgBtn!: HTMLButtonElement;
   private speedBtn!: HTMLButtonElement;
@@ -272,9 +278,9 @@ export class App {
       menuItem('More turbo settings\u2026', () => openSettings(this), '', 'settings'),
     ]);
     main.append(btn('', { icon: 'rewind', title: 'Rewind ~0.5 s (Ctrl+Z, hold to keep rewinding)', onClick: () => this.doRewind() }));
-    const snap = btn('', { icon: 'camera', title: 'Snapshots and screenshots' });
+    const snap = (this.snapBtn = btn('', { icon: 'camera', title: 'Snapshots, screenshots and frame capture' }));
     main.append(snap);
-    this.sprBtn = btn('', { icon: 'sprite', onClick: () => this.setSpritesVisible(!this.c64.vic.showSprites) });
+    this.sprBtn = btn('', { icon: 'sprite', onClick: () => this.setSpriteView(SPRITE_VIEW_NEXT[this.spriteView()]) });
     main.append(this.sprBtn);
     this.paintSpriteBtn();
     dropdown(snap, () => [
@@ -285,7 +291,11 @@ export class App {
       menuItem('Load snapshot file…', () => this.openDialog(false, [{ name: 'Snapshot', extensions: ['c64s'] }]), '', 'load'),
       h('hr'),
       menuItem('Save screenshot (PNG)…', () => this.screenshot(), '', 'camera'),
-      menuItem(this.c64.vic.showSprites ? 'Hide sprites (background only)' : 'Show sprites', () => this.setSpritesVisible(!this.c64.vic.showSprites), '', this.c64.vic.showSprites ? 'spriteoff' : 'sprite'),
+      menuItem(this.frameCap ? `Stop frame capture (${this.frameCap.saved} saved)` : 'Quick frame capture (changed frames only)', () => void this.toggleFrameCapture(), 'Ctrl+F', 'camera'),
+      menuItem('Frame capture folder…', () => void this.chooseFrameDir(), '', 'load'),
+      h('hr'),
+      ...(['all', 'background', 'sprites'] as SpriteView[]).map((v) =>
+        menuItem(`${v === this.spriteView() ? '\u25cf ' : '\u2003 '}${SPRITE_VIEW_LABEL[v]}`, () => this.setSpriteView(v), '', SPRITE_VIEW_ICON[v])),
     ]);
     main.append(btn('', { icon: 'paste', title: 'Type text from clipboard (Ctrl+Shift+V)', onClick: () => this.pasteText() }));
     main.append(h('span', { class: 'tb-sep' }));
@@ -390,6 +400,7 @@ export class App {
       else if (ctrl && e.code === 'KeyK') this.setKeyJoystickOff(!this.input.keysetsOff);
       else if (ctrl && e.code === 'KeyU') this.ultimate.toggle();
       else if (ctrl && e.code === 'KeyS') this.quickSave();
+      else if (ctrl && e.code === 'KeyF') void this.toggleFrameCapture();
       else if (ctrl && e.code === 'KeyL') void this.quickLoad();
       else if (ctrl && e.code === 'KeyD') this.setDebugger(!this.settings.ui.debugger);
       else if (ctrl && e.code === 'KeyP') this.togglePause();
@@ -764,6 +775,7 @@ export class App {
     if (this.running) this.pause();
     this.input.poll();
     const r = this.c64.runFrame();
+    if (this.frameCap) this.captureFrame();
     this.afterStep(r);
     this.pushAudio(false);
   }
@@ -953,26 +965,114 @@ export class App {
   }
 
   /** Draw or hide sprites on screen (display only: collisions and IRQs still happen). */
-  setSpritesVisible(on: boolean): void {
-    this.c64.vic.showSprites = on;
+  setSpritesVisible(on: boolean): void { this.setSpriteView(on ? 'all' : 'background'); }
+
+  spriteView(): SpriteView {
+    const v = this.c64.vic;
+    return v.spritesOnly ? 'sprites' : v.showSprites ? 'all' : 'background';
+  }
+  /** Everything, background only, or sprites only. Display only: collisions and IRQs still happen. */
+  setSpriteView(view: SpriteView): void {
+    const v = this.c64.vic;
+    v.showSprites = view !== 'background';
+    v.spritesOnly = view === 'sprites';
     this.paintSpriteBtn();
-    document.querySelectorAll<HTMLInputElement>('input[data-vis="sprites"]').forEach((i) => (i.checked = on));
-    toast(on ? 'Sprites shown' : this.running ? 'Sprites hidden: the screen shows only the background'
-      : 'Sprites hidden from the next frame: resume (or step a frame) to update the screen', false, 2200);
+    document.querySelectorAll<HTMLInputElement>('input[data-vis="sprites"]').forEach((i) => (i.checked = v.showSprites));
+    const what = view === 'all' ? 'Sprites shown' : view === 'background' ? 'Sprites hidden: the screen shows only the background'
+      : 'Sprites only: the checkerboard is transparent in screenshots and frame captures';
+    toast(this.running || view === 'all' ? what : `${what} (from the next frame: resume or step a frame)`, false, 2600);
   }
   private paintSpriteBtn(): void {
-    const on = this.c64.vic.showSprites, b = this.sprBtn;
+    const view = this.spriteView(), b = this.sprBtn;
     if (!b) return;
-    b.classList.toggle('on', !on);
-    b.title = on ? 'Hide sprites, to see or screenshot just the background' : 'Sprites are hidden: click to show them again';
-    b.querySelector('svg')?.replaceWith(icon(on ? 'sprite' : 'spriteoff'));
+    b.classList.toggle('on', view !== 'all');
+    b.title = view === 'all' ? 'Showing everything: click to hide sprites (background only)'
+      : view === 'background' ? 'Background only: click to show only the sprites'
+      : 'Sprites only: click to show everything again';
+    b.querySelector('svg')?.replaceWith(icon(SPRITE_VIEW_ICON[view]));
   }
 
   async screenshot(): Promise<void> {
-    const canvas = document.getElementById('screen') as HTMLCanvasElement;
-    const blob: Blob = await new Promise((res) => canvas.toBlob((b) => res(b!), 'image/png'));
-    const p = await window.host.saveFile('c64-screenshot.png', new Uint8Array(await blob.arrayBuffer()), [{ name: 'PNG image', extensions: ['png'] }]);
+    let data: Uint8Array;
+    const spritesOnly = this.c64.vic.spritesOnly;
+    if (spritesOnly) {
+      // 1:1 C64 pixels with a transparent background
+      const { w, h: ht } = this.video.crop;
+      data = await this.video.png(this.video.cropOf(this.c64.vic.framebuffer), w, ht);
+    } else {
+      const canvas = document.getElementById('screen') as HTMLCanvasElement;
+      const blob: Blob = await new Promise((res) => canvas.toBlob((b) => res(b!), 'image/png'));
+      data = new Uint8Array(await blob.arrayBuffer());
+    }
+    const p = await window.host.saveFile(spritesOnly ? 'c64-sprites.png' : 'c64-screenshot.png', data, [{ name: 'PNG image', extensions: ['png'] }]);
     if (p) toast('Screenshot saved');
+  }
+
+  // ------------------------------------------------------------ frame capture
+  /** Quick frame capture: every frame that differs from the last saved one becomes a PNG. */
+  frameCap: {
+    dir: string; start: number; prev: Uint8Array | null; saved: number; same: number;
+    pending: number; dropped: number; failed: string; chain: Promise<void>;
+  } | null = null;
+
+  async chooseFrameDir(): Promise<string | null> {
+    const d = await window.host.chooseDir(this.settings.ui.frameDir || undefined);
+    if (!d) return null;
+    this.settings.ui.frameDir = d;
+    this.persist();
+    toast(`Frame captures go to ${d}`);
+    return d;
+  }
+
+  async toggleFrameCapture(): Promise<void> {
+    if (this.frameCap) { await this.stopFrameCapture(); return; }
+    let base = this.settings.ui.frameDir;
+    if (!base) base = (await this.chooseFrameDir()) ?? '';
+    if (!base) return;
+    const t = new Date(), p2 = (n: number) => String(n).padStart(2, '0');
+    const stamp = `${t.getFullYear()}-${p2(t.getMonth() + 1)}-${p2(t.getDate())} ${p2(t.getHours())}${p2(t.getMinutes())}${p2(t.getSeconds())}`;
+    const dir = await window.host.joinPath(base, `C64 frames ${stamp}`);
+    this.frameCap = { dir, start: this.c64.frameCount, prev: null, saved: 0, same: 0, pending: 0, dropped: 0, failed: '', chain: Promise.resolve() };
+    this.snapBtn.classList.add('rec');
+    toast(`Capturing changed frames to ${dir}${this.running ? '' : ' - resume the machine to capture'} (Ctrl+F stops)`, false, 3500);
+    this.captureFrame(); // the picture on screen now is the first frame
+  }
+
+  private async stopFrameCapture(): Promise<void> {
+    const cap = this.frameCap;
+    if (!cap) return;
+    this.frameCap = null;
+    this.snapBtn.classList.remove('rec');
+    await cap.chain;
+    const extra = [cap.same ? `${cap.same} unchanged skipped` : '', cap.dropped ? `${cap.dropped} dropped, the disk could not keep up` : ''].filter(Boolean).join(', ');
+    toast(cap.failed ? `Frame capture failed: ${cap.failed}` : `Saved ${cap.saved} frame${cap.saved === 1 ? '' : 's'}${extra ? ` (${extra})` : ''} to ${cap.dir}`, !!cap.failed, 5000);
+  }
+
+  private captureFrame(): void {
+    const cap = this.frameCap!;
+    const cur = this.video.cropOf(this.c64.vic.framebuffer);
+    const prev = cap.prev;
+    if (prev && prev.length === cur.length) {
+      let same = true;
+      for (let i = 0; i < cur.length; i++) if (cur[i] !== prev[i]) { same = false; break; }
+      if (same) { cap.same++; return; }
+    }
+    cap.prev = cur;
+    if (cap.pending >= 250) { cap.dropped++; return; } // the encoder can't keep up (warp): don't eat all memory
+    // named by emulated frame since the capture started, so gaps show how long a picture stayed
+    const name = `frame_${String(this.c64.frameCount - cap.start).padStart(6, '0')}.png`;
+    const { w, h: ht } = this.video.crop;
+    cap.pending++;
+    cap.chain = cap.chain.then(async () => {
+      if (cap.failed) return;
+      try {
+        await window.host.writeFile(await window.host.joinPath(cap.dir, name), await this.video.png(cur, w, ht));
+        cap.saved++;
+      } catch (e) {
+        cap.failed = String((e as Error)?.message ?? e);
+        if (this.frameCap === cap) void this.stopFrameCapture();
+      } finally { cap.pending--; }
+    });
   }
 
   async loadLabelsFile(path?: string): Promise<number> {
@@ -994,6 +1094,7 @@ export class App {
     this.input.poll();
     if (this.settings.ui.debugger) this.recordBeamState();
     const r = this.c64.runFrame();
+    if (this.frameCap) this.captureFrame();
     if (this.pendingFrameHook && this.pendingFrameHook()) this.pendingFrameHook = null;
     this.checkDiskWriteBack();
     if (this.c64.frameCount % this.rewindEvery === 0) {

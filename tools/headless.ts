@@ -11,6 +11,7 @@ import { BinaryMonitor } from '../src/core/binmon';
 import { SidRecorder, buildPsid, toTicks } from '../src/core/sidrecord';
 import { WavRecorder } from '../src/core/wav';
 import { decodeSprite, encodeSprite, getPixel, readSpd, readSpriteFile, setPixel, spritesToAsm, transformSprite, writeSpd } from '../src/core/sprites';
+import { SPRITES_ONLY_KEY } from '../src/core/vic';
 
 const candidates = [
   process.env.C64_ROMS,
@@ -123,6 +124,18 @@ function check(name: string, ok: boolean, detail = ''): void {
   const ok = split > 0 && mid.slice(0, split).every((v) => v === 2) && mid.slice(split).every((v) => v === 5)
     && spriteRow(109).every((v) => v === 2) && spriteRow(111).every((v) => v === 2);
   check('sprite colour changed mid-line', ok, `line 109: ${spriteRow(109).join('')}\nline 110: ${mid.join(' ')}\nline 111: ${spriteRow(111).join('')}`);
+
+  // sprites-only view: the same sprite, and everything else (text, background, border) as the key
+  c.vic.spritesOnly = true;
+  runFrames(c, 2);
+  const row = (line: number) => Array.from(c.vic.framebuffer.slice((line - first) * W, (line - first + 1) * W));
+  const r109 = row(109), r60 = row(60);
+  const only = r109.slice(108, 156).every((v) => v === 2) && r109.slice(0, 108).every((v) => v === SPRITES_ONLY_KEY)
+    && r109.slice(156).every((v) => v === SPRITES_ONLY_KEY) && r60.every((v) => v === SPRITES_ONLY_KEY);
+  check('sprites-only view keeps sprites, keys out the rest', only, `line 109: ${r109.join(',')}\nline 60: ${r60.join(',')}`);
+  c.vic.spritesOnly = false;
+  runFrames(c, 2);
+  check('sprites-only view turns off again', spriteRow(109).every((v) => v === 2) && row(60).every((v) => v < 16), row(60).join(','));
 }
 
 // 4c. VICE binary monitor protocol, driven as a TCP client would drive it
