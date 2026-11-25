@@ -44,6 +44,7 @@ export class CPU6510 {
   lastOpcode = 0;
   /** Set when an interrupt sequence was just taken (debugger). */
   lastWasInterrupt = 0; // 0 none, 1 irq, 2 nmi
+  private skipPoll = false;
 
   constructor(public bus: CpuBus) {}
 
@@ -174,9 +175,14 @@ export class CPU6510 {
   private branch(cond: boolean): void {
     const off = this.fetch();
     if (!cond) return;
+    // interrupts are polled before the operand fetch, and again before the
+    // page fix-up; a taken branch that stays in its page doesn't poll in its
+    // last cycle, so an interrupt arriving then waits one more instruction
+    const irq = this.irqSampled, nmi = this.nmiSampled;
     this.rd(this.pc);
     const np = (this.pc + ((off ^ 0x80) - 0x80)) & 0xffff;
     if ((np & 0xff00) !== (this.pc & 0xff00)) this.rd((this.pc & 0xff00) | (np & 0xff));
+    else { this.irqSampled = irq; this.nmiSampled = nmi; }
     this.pc = np;
   }
 
@@ -184,18 +190,21 @@ export class CPU6510 {
     if (!brk) { this.rd(this.pc); this.rd(this.pc); }
     this.push(this.pc >> 8);
     this.push(this.pc & 0xff);
-    // NMI can hijack an IRQ/BRK sequence if it arrives before the vector fetch
+    this.push(brk ? this.p : (this.p & ~FLAG_B));
+    // an NMI seen up to the status push hijacks an IRQ/BRK sequence
     let vec = vector;
     if (vector === 0xfffe && this.nmiPending) { vec = 0xfffa; this.nmiPending = false; }
-    this.push(brk ? this.p : (this.p & ~FLAG_B));
     this.fi = 1;
     this.pc = this.rd(vec) | (this.rd(vec + 1) << 8);
+    // the sequence doesn't poll at its end: the handler's first instruction always runs
+    this.skipPoll = true;
   }
 
   /** Execute one instruction or interrupt sequence. */
   step(): void {
     if (this.jammed) { this.rd(0xffff); return; }
-    if (this.nmiSampled && this.nmiPending) {
+    if (this.skipPoll) this.skipPoll = false;
+    else if (this.nmiSampled && this.nmiPending) {
       this.nmiPending = false;
       this.lastWasInterrupt = 2;
       this.lastPc = this.pc;

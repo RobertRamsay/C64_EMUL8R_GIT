@@ -24,6 +24,7 @@ const builds = [
   { ...common, entryPoints: ['src/renderer/app.ts'], outfile: 'dist/renderer/app.js', platform: 'browser', format: 'iife', target: ['es2020', 'safari14', 'chrome90'] },
 ];
 if (tests) builds.push({ ...common, entryPoints: ['tools/headless.ts'], outfile: 'dist/tests/headless.js', platform: 'node', format: 'cjs' });
+if (tests) builds.push({ ...common, entryPoints: ['tools/testbench.ts'], outfile: 'dist/tests/testbench.js', platform: 'node', format: 'cjs' });
 
 copyStatic();
 if (watch) {

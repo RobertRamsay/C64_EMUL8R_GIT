@@ -70,7 +70,7 @@ export class Monitor {
     const c = this.c64.cpu;
     const p = c.p;
     const flags = 'NV-BDIZC'.split('').map((f, i) => (p & (0x80 >> i) ? f : '.')).join('');
-    return `  ADDR A  X  Y  SP 00 01 NV-BDIZC LIN CYC  STOPWATCH\n.;${hex4(c.pc)} ${hex2(c.a)} ${hex2(c.x)} ${hex2(c.y)} ${hex2(c.s)} ${hex2(this.c64.cpuPortDir)} ${hex2(this.c64.peek(1))} ${flags} ${hex4(this.c64.vic.raster).slice(1)} ${String(this.c64.vic.cycle).padStart(3, '0')} ${String(this.c64.cycles).padStart(10)}`;
+    return `  ADDR A  X  Y  SP 00 01 NV-BDIZC LIN CYC  STOPWATCH\n.;${hex4(c.pc)} ${hex2(c.a)} ${hex2(c.x)} ${hex2(c.y)} ${hex2(c.s)} ${hex2(this.c64.cpuPortDir)} ${hex2(this.c64.peek(1))} ${flags} ${hex4(this.c64.vic.beamLine).slice(1)} ${String(this.c64.vic.cycle).padStart(3, '0')} ${String(this.c64.cycles).padStart(10)}`;
   }
 
   disasmLines(start: number, end: number): string[] {
@@ -311,7 +311,7 @@ export class Monitor {
     const c = this.c64;
     const v = c.vic;
     const lines = [
-      `VIC: raster $${hex4(v.raster).slice(1)} cycle ${v.cycle}  D011=$${hex2(v.regs[0x11])} D016=$${hex2(v.regs[0x16])} D018=$${hex2(v.regs[0x18])} IRQ=$${hex2(v.irqFlags)}/$${hex2(v.regs[0x1a])}`,
+      `VIC: raster $${hex4(v.beamLine).slice(1)} cycle ${v.cycle}  D011=$${hex2(v.regs[0x11])} D016=$${hex2(v.regs[0x16])} D018=$${hex2(v.regs[0x18])} IRQ=$${hex2(v.irqFlags)}/$${hex2(v.regs[0x1a])}`,
       `     bank $${hex4((3 - (c.cia2.portAOut() & 3)) << 14)} screen +$${hex4(v.screenAddr())} chars +$${hex4(v.charAddr())} bitmap +$${hex4(v.bitmapAddr())}`,
       `CIA1: TA=$${hex4(c.cia1.counter[0])} (latch $${hex4(c.cia1.latch[0])}) TB=$${hex4(c.cia1.counter[1])} CRA=$${hex2(c.cia1.cra)} CRB=$${hex2(c.cia1.crb)} ICR=$${hex2(c.cia1.icrData)} mask=$${hex2(c.cia1.icrMask)}`,
       `CIA2: TA=$${hex4(c.cia2.counter[0])} (latch $${hex4(c.cia2.latch[0])}) TB=$${hex4(c.cia2.counter[1])} CRA=$${hex2(c.cia2.cra)} CRB=$${hex2(c.cia2.crb)} ICR=$${hex2(c.cia2.icrData)} mask=$${hex2(c.cia2.icrMask)}`,

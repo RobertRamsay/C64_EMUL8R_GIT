@@ -296,13 +296,23 @@ export class VICII {
   isBALow(): boolean { return this.ba; }
 
   private computeBA(c: number): boolean {
-    return (this.badline && c >= 12 && c <= 54) || (this.spDmaBits & this.baSprites[c]) !== 0;
+    let dma = this.spDmaBits;
+    // sprite DMA switches on in the first phase of cycle 55/56, in time to pull
+    // BA low in that same cycle: count the sprites about to start
+    if (c === 55 || c === 56) {
+      const en = this.regs[0x15] & ~dma, y = this.raster & 0xff;
+      for (let i = 0; i < 8; i++) if (en & (1 << i) && this.spY[i] === y) dma |= 1 << i;
+    }
+    return (this.badline && c >= 12 && c <= 54) || (dma & this.baSprites[c]) !== 0;
   }
 
   // ---- main clock ----
   clock(): void {
     const c = this.cycle;
     const m = this.model;
+    // the raster counter steps at the start of cycle 1: a CPU read in the
+    // line's last cycle still sees the old line
+    if (this.lineEnd) this.nextLine();
 
     // raster IRQ / new line handling
     if (c === 1) {
@@ -414,17 +424,27 @@ export class VICII {
     // end of line
     if (c === m.cyclesPerLine) {
       this.cycle = 1;
-      this.raster++;
-      if (this.raster >= m.lines) {
-        this.raster = 0;
-        this.vcBase = 0;
-        this.frame++;
-        this.frameReady = true;
-        this.spSeen = this.spSeenCur;
-        this.spSeenCur = [];
-      }
+      this.lineEnd = true;
     } else {
       this.cycle = c + 1;
+    }
+  }
+
+  /** line of the next cycle to run (raster steps at its start); with `cycle`, the beam position */
+  get beamLine(): number { return this.lineEnd ? (this.raster + 1) % this.model.lines : this.raster; }
+
+  /** the line's last cycle has run: step the raster counter */
+  private lineEnd = false;
+  private nextLine(): void {
+    this.lineEnd = false;
+    this.raster++;
+    if (this.raster >= this.model.lines) {
+      this.raster = 0;
+      this.vcBase = 0;
+      this.frame++;
+      this.frameReady = true;
+      this.spSeen = this.spSeenCur;
+      this.spSeenCur = [];
     }
   }
 
@@ -730,7 +750,7 @@ export class VICII {
       irqFlags: this.irqFlags, rasterCompare: this.rasterCompare, mxChar: Array.from(this.mxChar), mxColor: Array.from(this.mxColor),
       spDma: Array.from(this.spDma), spDisplay: Array.from(this.spDisplay), spMc: Array.from(this.spMc), spMcBase: Array.from(this.spMcBase),
       spExpFF: Array.from(this.spExpFF), spData: Array.from(this.spData), spFetched: Array.from(this.spFetched),
-      spSpriteColl: this.spSpriteColl, spBgColl: this.spBgColl, mainBorder: this.mainBorder, vertBorder: this.vertBorder, ba: this.ba,
+      spSpriteColl: this.spSpriteColl, spBgColl: this.spBgColl, mainBorder: this.mainBorder, vertBorder: this.vertBorder, ba: this.ba, lineEnd: this.lineEnd,
     };
   }
   loadState(s: any): void {
@@ -740,7 +760,7 @@ export class VICII {
     this.mxChar.set(s.mxChar); this.mxColor.set(s.mxColor); this.spDma.set(s.spDma); this.spDisplay.set(s.spDisplay);
     this.updateDmaBits();
     this.spMc.set(s.spMc); this.spMcBase.set(s.spMcBase); this.spExpFF.set(s.spExpFF); this.spData.set(s.spData); this.spFetched.set(s.spFetched);
-    this.spSpriteColl = s.spSpriteColl; this.spBgColl = s.spBgColl; this.mainBorder = s.mainBorder; this.vertBorder = s.vertBorder; this.ba = s.ba;
+    this.spSpriteColl = s.spSpriteColl; this.spBgColl = s.spBgColl; this.mainBorder = s.mainBorder; this.vertBorder = s.vertBorder; this.ba = s.ba; this.lineEnd = !!s.lineEnd;
     this.updateBadline();
     this.updateIrq();
   }

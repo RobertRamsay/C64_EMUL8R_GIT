@@ -208,6 +208,9 @@ export class C64 implements CpuBus, VicMemory {
     this.updateMap();
   }
 
+  /** Test harness hook: VICE's debug cartridge, where test programs write their exit code to $D7FF. */
+  debugCart: ((v: number) => void) | null = null;
+
   setIrq(bit: number, active: boolean): void {
     if (active) this.cpu.irqLines |= bit; else this.cpu.irqLines &= ~bit;
     this.linesChanged = true;
@@ -517,6 +520,7 @@ export class C64 implements CpuBus, VicMemory {
       return;
     }
     if (page <= 0xd7) {
+      if (addr === 0xd7ff && this.debugCart) this.debugCart(v);
       this.syncSid();
       const two = this.isSid2(addr);
       if (two) this.sid2!.write(addr, v); else this.sid.write(addr, v);
@@ -664,7 +668,7 @@ export class C64 implements CpuBus, VicMemory {
   evalCondition(cond: string, value: number): boolean {
     const regs: Record<string, number> = {
       A: this.cpu.a, X: this.cpu.x, Y: this.cpu.y, SP: this.cpu.s, S: this.cpu.s, P: this.cpu.p,
-      RL: this.vic.raster, RASTER: this.vic.raster, CY: this.vic.cycle, V: value, VALUE: value, PC: this.cpu.pc,
+      RL: this.vic.beamLine, RASTER: this.vic.beamLine, CY: this.vic.cycle, V: value, VALUE: value, PC: this.cpu.pc,
     };
     return cond.split('&&').every((part) => {
       const m = part.trim().match(/^([A-Z]+|@\$?[0-9A-F]+)\s*(==|!=|<=|>=|<|>|=)\s*(\$?[0-9A-F]+|%[01]+|\d+)$/i);
@@ -707,7 +711,7 @@ export class C64 implements CpuBus, VicMemory {
       const h = this.historyPos * 3;
       this.history[h] = (pc << 8) | this.peek(pc);
       this.history[h + 1] = (cpu.a << 24) | (cpu.x << 16) | (cpu.y << 8) | cpu.s;
-      this.history[h + 2] = (cpu.p << 24) | (this.vic.raster << 12) | this.vic.cycle;
+      this.history[h + 2] = (cpu.p << 24) | (this.vic.beamLine << 12) | this.vic.cycle;
       this.historyPos = (this.historyPos + 1) % this.historySize;
       if (this.historyCount < this.historySize) this.historyCount++;
     }
@@ -810,7 +814,7 @@ export class C64 implements CpuBus, VicMemory {
    */
   cyclesToBeam(line: number, cycle: number): number {
     const m = this.vic.model, cpl = m.cyclesPerLine, total = cpl * m.lines;
-    const now = this.vic.raster * cpl + this.vic.cycle - 1;
+    const now = this.vic.beamLine * cpl + this.vic.cycle - 1;
     const d = (line * cpl + cycle - 1 - now + total) % total;
     return d === 0 ? total : d;
   }

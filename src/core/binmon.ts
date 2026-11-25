@@ -428,7 +428,7 @@ export class BinaryMonitor {
     if (!cpu) return null;
     const c64 = this.host.c64;
     const values: [number, number][] = [[0x00, cpu.a], [0x01, cpu.x], [0x02, cpu.y], [0x03, cpu.pc], [0x04, cpu.s], [0x05, cpu.p]];
-    if (space === 0) values.push([0x35, c64.vic.raster], [0x36, c64.vic.cycle], [0x37, c64.peek(0)], [0x38, c64.peek(1)]);
+    if (space === 0) values.push([0x35, c64.vic.beamLine], [0x36, c64.vic.cycle], [0x37, c64.peek(0)], [0x38, c64.peek(1)]);
     const w = new Writer().u16(values.length);
     for (const [rid, v] of values) w.u8(3).u8(rid).u16(v);
     return w.data;

@@ -920,7 +920,7 @@ export class App {
     const left = r[0x16] & 8 ? 32 : 39, right = r[0x16] & 8 ? 352 : 343;
     tags.push(line >= top && line < bottom && p.x >= left && p.x < right ? 'display' : 'border');
     if (line === v.rasterCompare) tags.push('raster IRQ line');
-    ro.innerHTML = `line <b>${line}</b> ($${line.toString(16).toUpperCase().padStart(3, '0')}) · cycle <b>${cycle}</b> · x ${p.x}<br>${tags.join(' · ')}<br><span class="dim">beam now: line ${v.raster} cycle ${v.cycle} · LMB run here · RMB back a frame</span>`;
+    ro.innerHTML = `line <b>${line}</b> ($${line.toString(16).toUpperCase().padStart(3, '0')}) · cycle <b>${cycle}</b> · x ${p.x}<br>${tags.join(' · ')}<br><span class="dim">beam now: line ${v.beamLine} cycle ${v.cycle} · LMB run here · RMB back a frame</span>`;
     ro.hidden = false;
     const wrap = document.getElementById('screen-wrap')!.getBoundingClientRect();
     const mx = clientX - wrap.left, my = clientY - wrap.top;
@@ -975,7 +975,7 @@ export class App {
 
   private showBeam(): void {
     const m = this.c64.vic.model;
-    const line = this.c64.vic.raster - m.firstVisibleLine;
+    const line = this.c64.vic.beamLine - m.firstVisibleLine;
     this.video.beamLine = line >= 0 && line < m.visibleLines ? line : -1;
     this.video.beamX = 8 * this.c64.vic.cycle - 112 + 8;
     this.video.draw(this.c64.vic.framebuffer);

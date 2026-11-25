@@ -166,7 +166,7 @@ export class DebuggerUI {
     this.els.flags.innerHTML = 'NV-BDIZC'.split('').map((f, i) => `<span class="flag${p & (0x80 >> i) ? ' on' : ''}" data-bit="${7 - i}" title="toggle ${f}">${f}</span>`).join('');
     const v = c.vic;
     this.els.cpuMeta.innerHTML = [
-      `raster <b>${hex4(v.raster).slice(1)}</b> (${v.raster})`, `cycle <b>${v.cycle}</b>`, `frame ${c.frameCount}`,
+      `raster <b>${hex4(v.beamLine).slice(1)}</b> (${v.beamLine})`, `cycle <b>${v.cycle}</b>`, `frame ${c.frameCount}`,
       `clk ${c.cycles}`, `IRQ ${cpu.irqLines ? '<b style="color:var(--warn)">' + ['VIC', 'CIA1', 'REU'].filter((_, i) => cpu.irqLines & (1 << i)).join('+') + '</b>' : '-'}`,
       `NMI ${cpu.nmiLines ? '<b style="color:var(--warn)">on</b>' : '-'}`, cpu.jammed ? '<b style="color:var(--err)">JAMMED</b>' : '',
     ].filter(Boolean).join(' · ');
@@ -486,7 +486,7 @@ export class DebuggerUI {
     const mode = ['Standard text', 'Multicolor text', 'Hires bitmap', 'Multicolor bitmap', 'ECM text', 'Invalid (ECM+MC)', 'Invalid (ECM+BMM)', 'Invalid (ECM+BMM+MC)'][(ecm ? 4 : 0) | (bmm ? 2 : 0) | (mcm ? 1 : 0)];
     const rows: [string, string][] = [
       ['Mode', `<b>${mode}</b>`],
-      ['Raster / cycle', `${v.raster} ($${hex4(v.raster).slice(1)}) / ${v.cycle}   IRQ at ${v.rasterCompare}`],
+      ['Raster / cycle', `${v.beamLine} ($${hex4(v.beamLine).slice(1)}) / ${v.cycle}   IRQ at ${v.rasterCompare}`],
       ['Bank', `$${hex4(bank)}–$${hex4(bank + 0x3fff)}`],
       ['Screen', `$${hex4(bank + v.screenAddr())}`],
       [bmm ? 'Bitmap' : 'Charset', bmm ? `$${hex4(bank + v.bitmapAddr())}` : `$${hex4(bank + v.charAddr())}${(bank & 0x4000) === 0 && (v.charAddr() & 0x3000) === 0x1000 ? ' (char ROM)' : ''}`],
