@@ -49,6 +49,8 @@ const ICONS: Record<string, string> = {
   full: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   tape: '<rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="8" cy="12" r="2"/><circle cx="16" cy="12" r="2"/>',
   cart: '<path d="M5 4h14v12H5z"/><path d="M7 16v4M10 16v4M14 16v4M17 16v4"/>',
+  prevtrack: '<path d="M6 5v14"/><path d="M18 5l-9 7 9 7z"/>',
+  nexttrack: '<path d="M18 5v14"/><path d="M6 5l9 7-9 7z"/>',
   music: '<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>',
   paste: '<rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4V2h6v2M9 10h6M9 14h6"/>',
   swap: '<path d="M4 8h14l-3-3M20 16H6l3 3"/>',
@@ -82,7 +84,7 @@ export function toast(msg: string, err = false, ms = 2600): void {
 }
 
 /** Simple dropdown menu attached to a button. */
-export function dropdown(button: HTMLElement, build: () => (HTMLElement | null)[], right = false): HTMLElement {
+export function dropdown(button: HTMLElement, build: () => (HTMLElement | null)[], right = false, cls = ''): HTMLElement {
   const wrap = h('div', { class: 'dropdown' });
   button.replaceWith(wrap);
   wrap.append(button);
@@ -91,7 +93,7 @@ export function dropdown(button: HTMLElement, build: () => (HTMLElement | null)[
   const outside = (e: MouseEvent) => { if (!wrap.contains(e.target as Node)) close(); };
   button.addEventListener('click', () => {
     if (menu) { close(); return; }
-    menu = h('div', { class: 'menu' + (right ? ' right' : '') });
+    menu = h('div', { class: 'menu' + (right ? ' right' : '') + (cls ? ' ' + cls : '') });
     for (const item of build()) if (item) menu.append(item);
     menu.addEventListener('click', (e) => { if ((e.target as HTMLElement).closest('button')) close(); });
     wrap.append(menu);

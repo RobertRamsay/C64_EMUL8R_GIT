@@ -74,6 +74,10 @@ export class App {
   private keysBtn!: HTMLButtonElement;
   private dbgBtn!: HTMLButtonElement;
   private speedBtn!: HTMLButtonElement;
+  private sidBar!: HTMLElement;
+  private sidPrevBtn!: HTMLButtonElement;
+  private sidNextBtn!: HTMLButtonElement;
+  private sidSongBtn!: HTMLButtonElement;
   /** the file last autostarted: REBOOT loads it again */
   private lastStart: { name: string; data: Uint8Array; path?: string } | null = null;
   binmon: BinaryMonitor | null = null;
@@ -360,6 +364,25 @@ export class App {
     main.append(btn('', { icon: 'paste', title: 'Type text from clipboard (Ctrl+Shift+V)', onClick: () => this.pasteText() }));
     main.append(h('span', { class: 'tb-sep' }));
     main.append(btn('Ultimate', { icon: 'ultimate', title: 'Ultimate menu / file browser (Ctrl+U)', onClick: () => this.ultimate.toggle() }));
+    // SID player: only shown while a .sid tune is playing
+    this.sidBar = h('span', { class: 'tb-group tb-sid' });
+    this.sidBar.hidden = true;
+    this.sidPrevBtn = btn('', { icon: 'prevtrack', title: 'Previous song in this SID (Ctrl+Left)', onClick: () => this.sidNext(-1) });
+    this.sidSongBtn = btn('', { icon: 'music', cls: 'sid-song', title: 'Pick a song from this SID' });
+    this.sidNextBtn = btn('', { icon: 'nexttrack', title: 'Next song in this SID (Ctrl+Right)', onClick: () => this.sidNext(1) });
+    this.sidBar.append(h('span', { class: 'tb-sep' }), this.sidPrevBtn, this.sidSongBtn, this.sidNextBtn);
+    main.append(this.sidBar);
+    dropdown(this.sidSongBtn, () => {
+      const info = this.sidInfo;
+      if (!info) return [];
+      return [
+        h('div', { class: 'menu-title' }, `${info.name || 'SID'} — ${info.songs} song${info.songs === 1 ? '' : 's'}`),
+        ...Array.from({ length: info.songs }, (_, i) =>
+          menuItem(`${i === this.sidSong ? '● ' : '  '}Song ${i + 1}${i === info.startSong - 1 ? ' (default)' : ''}`, () => this.sidSelect(i))),
+        h('hr'),
+        menuItem('Restart this song', () => this.sidSelect(this.sidSong), '', 'reset'),
+      ];
+    }, false, 'scroll');
 
     this.keysBtn = btn('', { icon: 'joystick', onClick: () => this.setKeyJoystickOff(!this.input.keysetsOff) });
     right.append(this.keysBtn);
@@ -467,6 +490,8 @@ export class App {
       else if (ctrl && e.code === 'KeyZ') { if (!e.repeat || ++this.rewindHeld % 3 === 0) this.doRewind(); }
       else if (ctrl && e.shiftKey && e.code === 'KeyV') this.pasteText();
       else if (ctrl && e.code === 'Enter') window.host.toggleFullscreen();
+      else if (ctrl && this.sidInfo && e.code === 'ArrowLeft') this.sidNext(-1);
+      else if (ctrl && this.sidInfo && e.code === 'ArrowRight') this.sidNext(1);
       else handled = false;
       if (handled) { e.preventDefault(); return; }
     }
@@ -572,8 +597,14 @@ export class App {
 
   sidNext(delta: number): void {
     if (!this.sidInfo) return;
-    const n = (this.sidSong + delta + this.sidInfo.songs) % this.sidInfo.songs;
+    this.sidSelect((this.sidSong + delta + this.sidInfo.songs) % this.sidInfo.songs);
+  }
+
+  /** Restart the playing SID on song n (0-based). */
+  sidSelect(n: number): void {
     const raw = this.sidInfo;
+    if (!raw) return;
+    n = Math.max(0, Math.min(raw.songs - 1, n));
     this.sidSong = n;
     this.c64.hardReset();
     let frames = 0;
@@ -586,6 +617,8 @@ export class App {
       }
       return false;
     };
+    if (!this.running) { this.running = true; this.updatePauseUi(); }
+    this.updateStatus();
   }
 
   async saveDisk(): Promise<void> {
@@ -1338,6 +1371,16 @@ export class App {
   }
 
   // ------------------------------------------------------------ status bar
+  private paintSidBar(): void {
+    const bar = this.sidBar, info = this.sidInfo;
+    if (!bar) return;
+    bar.hidden = !info;
+    if (!info) return;
+    const lab = `${this.sidSong + 1} / ${info.songs}`, span = this.sidSongBtn.querySelector('span');
+    if (span) { if (span.textContent !== lab) span.textContent = lab; } else this.sidSongBtn.append(h('span', {}, lab));
+    this.sidPrevBtn.disabled = this.sidNextBtn.disabled = info.songs <= 1;
+  }
+
   updatePauseUi(): void {
     clear(this.pauseBtn).append(...[btnIcon(this.running ? 'pause' : 'play')]);
     document.getElementById('pause-badge')!.hidden = this.running || !this.c64.hasRoms;
@@ -1371,6 +1414,7 @@ export class App {
     const mhz = this.c64.cpuMhz, lab = this.speedBtn?.querySelector('span');
     if (lab && lab.textContent !== `${mhz} MHz`) lab.textContent = `${mhz} MHz`;
     this.speedBtn?.classList.toggle('on', mhz > 1);
+    this.paintSidBar();
     const cfg = this.c64.config;
     document.getElementById('st-model')!.textContent =
       `${cfg.video} · SID ${cfg.sidModel}${cfg.sid2Address ? ' + $' + hex4(cfg.sid2Address) : ''}${cfg.reuSize ? ' · REU ' + (cfg.reuSize >= 1024 ? cfg.reuSize / 1024 + 'MB' : cfg.reuSize + 'K') : ''}${this.c64.cpuMhz > 1 ? ' · ' + this.c64.cpuMhz + 'MHz' : ''}`;
