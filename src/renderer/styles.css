@@ -367,3 +367,5 @@ input[type=range] { accent-color: var(--accent); }
 /* ------------------------------------------------------------ tooltips */
 .tip { position: fixed; z-index: 3000; max-width: 320px; padding: 5px 9px; font-size: 12px; line-height: 1.35; white-space: pre-line; color: var(--silver-hi); background: rgba(28, 30, 42, .97); border: 1px solid var(--line2); border-radius: 6px; box-shadow: 0 6px 20px rgba(0, 0, 0, .5); pointer-events: none; opacity: 0; visibility: hidden; transition: opacity .12s; }
 .tip.show { opacity: 1; visibility: visible; }
+.cpop-hint { grid-column: 1 / -1; max-width: 100px; font-size: 9px; line-height: 1.25; color: var(--muted); }
+#screen-wrap.eyedropper, #screen-wrap.eyedropper * { cursor: crosshair !important; }

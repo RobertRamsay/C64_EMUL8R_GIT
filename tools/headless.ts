@@ -18,6 +18,7 @@ import { PALETTES, parseVpl } from '../src/core/palettes';
 import { toVpl } from '../src/renderer/ui/paletteEditor';
 import { engineInfo, chromiumYear } from '../src/renderer/perf';
 import { isMovedOnly, findActors } from '../src/core/framediff';
+import { codeOverlap, immediateSource, parseColour, resolveField, rowsToSprite, spriteRows } from '../src/core/inspect';
 
 const candidates = [
   process.env.C64_ROMS,
@@ -663,6 +664,56 @@ if (roms.dos1541) {
   const asm = spritesToAsm([m], 0x2000, true, 'acme');
   check('sprite ACME source', asm.includes('!byte $70, $00, $00') && asm.includes('sprite_0:') && asm.includes('pointer $80'), asm.slice(0, 300));
   check('sprite KickAss source', spritesToAsm([d], 0x3000, false, 'kick').includes('.byte $80, $00, $00  // #.......'));
+}
+
+// ---- MCP link: register overrides, field names, sprite text grids, code detection
+{
+  const c = machine(false);
+  runFrames(c, 120);
+  // a loop that writes the border and sprite 0 colour every pass: LDA #2 / STA $D020 / LDA #5 / STA $D027 / JMP
+  const prog = [0xa9, 0x02, 0x8d, 0x20, 0xd0, 0xa9, 0x05, 0x8d, 0x27, 0xd0, 0x4c, 0x00, 0xc0];
+  c.ram.set(prog, 0xc000);
+  const before = c.ram.slice(0xc000, 0xc000 + prog.length);
+  c.codeMap = new Uint8Array(0x10000);
+  c.cpu.pc = 0xc000;
+  runFrames(c, 2);
+  check('mcp: program sets the border', (c.vic.regs[0x20] & 15) === 2);
+  c.setOverride(0xd020, 0x00, 0x0f);
+  runFrames(c, 2);
+  check('mcp: override wins over program writes', (c.vic.regs[0x20] & 15) === 0, `border ${c.vic.regs[0x20] & 15}`);
+  check('mcp: override changes no RAM', c.ram.slice(0xc000, 0xc000 + prog.length).every((v, i) => v === before[i]));
+  c.setOverride(0xd067, 0x0e, 0x0f); // mirror of $D027
+  runFrames(c, 1);
+  check('mcp: VIC mirrors share an override', (c.vic.regs[0x27] & 15) === 14);
+  c.clearOverride();
+  runFrames(c, 1);
+  check('mcp: clearing gives the program its registers back', (c.vic.regs[0x20] & 15) === 2 && (c.vic.regs[0x27] & 15) === 5);
+  // a SID waveform override keeps the gate bit the program writes
+  c.setOverride(0xd404, 0x40, 0xf0);
+  c.poke(0xd404, 0x21);
+  check('mcp: SID waveform override keeps the gate', c.sid.regs[4] === 0x41, `$${c.sid.regs[4].toString(16)}`);
+  c.clearOverride();
+  const f = resolveField(c, 'voice2_pulse_width', 0x123);
+  check('mcp: 12-bit field splits over two registers', JSON.stringify(f.sets) === JSON.stringify([{ addr: 0xd409, value: 0x23, mask: 0xff }, { addr: 0xd40a, value: 0x01, mask: 0x0f }]), JSON.stringify(f.sets));
+  check('mcp: colour names', resolveField(c, 'sprite3_colour', 'Light Blue').sets[0].value === 14 && parseColour('dark grey') === 11 && parseColour('gray') === 12);
+  let bad = false; try { resolveField(c, 'border', 'mauve'); } catch { bad = true; }
+  check('mcp: unknown colour refused', bad);
+  // writers: who stores to $D027, and the LDA #nn that feeds it
+  const pcs = new Set<number>();
+  c.traceWrites([0xd027], (_a, _v, pc) => pcs.add(pc));
+  runFrames(c, 1);
+  c.traceWrites(null);
+  check('mcp: write trace finds the store', pcs.has(0xc007), [...pcs].map((p) => p.toString(16)).join(','));
+  check('mcp: immediate load before the store', immediateSource(c, 0xc007) === 0xc005);
+  check('mcp: code detected, operand bytes included', codeOverlap(c, 0xc006, 1).includes(0xc005) && codeOverlap(c, 0xc100, 16).length === 0);
+  // sprite text round trip
+  const d = new Uint8Array(64);
+  setPixel(d, 0, 0, 2, false); setPixel(d, 23, 20, 2, false);
+  const rows = spriteRows(d, false);
+  check('mcp: sprite rows', rows.length === 21 && rows[0] === '#' + '.'.repeat(23) && rowsToSprite(rows, false, d).every((v, i) => v === d[i]));
+  const m = new Uint8Array(64);
+  setPixel(m, 4, 3, 3, true);
+  check('mcp: multicolour sprite rows', spriteRows(m, true)[3] === '..3.........' && rowsToSprite(spriteRows(m, true), true, m).every((v, i) => v === m[i]));
 }
 
 if (process.argv.includes('--dump')) writeFileSync('screen.txt', '');

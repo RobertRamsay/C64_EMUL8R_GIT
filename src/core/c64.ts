@@ -139,7 +139,8 @@ export class C64 implements CpuBus, VicMemory {
   stop: StopReason | null = null;
   private heat = false;
   get heatEnabled(): boolean { return this.heat; }
-  set heatEnabled(v: boolean) { this.heat = v; this.memHooks = v || this.watchActive; }
+  set heatEnabled(v: boolean) { this.heat = v; this.updateMemHooks(); }
+  private updateMemHooks(): void { this.memHooks = this.heat || this.watchActive || !!this.writeTrace; }
   /** watchpoints or the heatmap need to see every memory access */
   private memHooks = false;
   /** CPU writes so far; a loop that writes nothing can be skipped (see runFrame) */
@@ -317,6 +318,7 @@ export class C64 implements CpuBus, VicMemory {
   }
 
   reset(): void {
+    this.codeMap?.fill(0);
     this.cpuPortDir = 0x2f; this.cpuPortData = 0x37;
     this.cia1.reset(); this.cia2.reset();
     this.cia2.ports.writeA!(this.cia2.portAOut());
@@ -431,6 +433,7 @@ export class C64 implements CpuBus, VicMemory {
     if (this.memHooks) {
       if (this.watchActive) this.checkWatch(addr, true, v);
       if (this.heat) this.heatWrite[addr] = 255;
+      if (this.writeTrace && this.writeTrace.addrs[addr]) this.writeTrace.hit(addr, v, this.cpu.lastPc);
     }
     this.writeMem(addr, v);
   }
@@ -513,6 +516,7 @@ export class C64 implements CpuBus, VicMemory {
   }
 
   private writeIO(addr: number, v: number): void {
+    if (this.ovActive) v = this.applyOverride(addr, v);
     const page = addr >> 8;
     if (page <= 0xd3) {
       if ((addr === 0xd030 || addr === 0xd031) && this.writeTurboReg(addr, v)) return;
@@ -603,6 +607,95 @@ export class C64 implements CpuBus, VicMemory {
     else this.poke(addr, v);
   }
 
+  // ------------------------------------------------------------ remote tweaks (MCP)
+  /**
+   * Instruction start addresses the CPU has executed since the last reset
+   * (null = not recorded). Tells code from data before anything writes RAM.
+   */
+  codeMap: Uint8Array | null = null;
+
+  /** Record which code writes the flagged addresses (see traceWrites). */
+  private writeTrace: { addrs: Uint8Array; hit: (addr: number, v: number, pc: number) => void } | null = null;
+  /** Call `hit` for every CPU write to one of `addrs`; null stops. */
+  traceWrites(addrs: number[] | null, hit?: (addr: number, v: number, pc: number) => void): void {
+    if (!addrs || !hit) this.writeTrace = null;
+    else {
+      const flags = new Uint8Array(0x10000);
+      for (const a of addrs) flags[a & 0xffff] = 1;
+      this.writeTrace = { addrs: flags, hit };
+    }
+    this.updateMemHooks();
+  }
+
+  /**
+   * I/O register overrides: forced bits of VIC / SID registers. A CPU write
+   * keeps its other bits, so the program runs exactly as before and nothing
+   * in RAM changes; clearing one writes back what the program last wrote.
+   * Keys: VIC $00-$3F, SID $400-$41F, second SID $500-$51F.
+   */
+  readonly overrides = new Map<number, { value: number; mask: number; program: number }>();
+  private ovMask = new Uint8Array(0x600);
+  private ovVal = new Uint8Array(0x600);
+  private ovActive = false;
+
+  /** Override key of an I/O address, or -1 if it can't be overridden. */
+  overrideKey(addr: number): number {
+    addr &= 0xffff;
+    const page = addr >> 8;
+    if (this.isSid2(addr)) return 0x500 | (addr & 0x1f);
+    if (page >= 0xd0 && page <= 0xd3) return addr & 0x3f;
+    if (page >= 0xd4 && page <= 0xd7) return 0x400 | (addr & 0x1f);
+    return -1;
+  }
+  /** The I/O address of an override key. */
+  overrideAddr(key: number): number {
+    return key < 0x400 ? 0xd000 | key : key < 0x500 ? 0xd400 | (key & 0x1f) : this.config.sid2Address | (key & 0x1f);
+  }
+  private regAt(key: number): number {
+    return key < 0x400 ? this.vic.regs[key] : key < 0x500 ? this.sid.regs[key & 0x1f] : this.sid2?.regs[key & 0x1f] ?? 0;
+  }
+  private applyOverride(addr: number, v: number): number {
+    const k = this.overrideKey(addr);
+    if (k < 0) return v;
+    const m = this.ovMask[k];
+    if (!m) return v;
+    const o = this.overrides.get(k);
+    if (o) o.program = v;
+    return (v & ~m) | (this.ovVal[k] & m);
+  }
+  /** Force the `mask` bits of a VIC / SID register to `value`, at once and on every later write. */
+  setOverride(addr: number, value: number, mask = 0xff): number {
+    const k = this.overrideKey(addr);
+    if (k < 0) throw new Error(`$${(addr & 0xffff).toString(16)} is not a VIC or SID register`);
+    const old = this.overrides.get(k);
+    const program = old ? old.program : this.regAt(k);
+    this.overrides.set(k, { value: value & 0xff, mask: mask & 0xff, program });
+    this.ovMask[k] = mask & 0xff; this.ovVal[k] = value & 0xff;
+    this.ovActive = true;
+    this.rewriteReg(k, program);
+    return k;
+  }
+  /** Drop one override (by address) or all; the register gets back what the program last wrote. */
+  clearOverride(addr?: number): void {
+    const keys = addr === undefined ? [...this.overrides.keys()] : [this.overrideKey(addr)];
+    for (const k of keys) {
+      const o = this.overrides.get(k);
+      if (!o) continue;
+      this.overrides.delete(k);
+      this.ovMask[k] = 0;
+      this.rewriteReg(k, o.program);
+    }
+    this.ovActive = this.overrides.size > 0;
+  }
+  /** Rewrite a register (through the overrides) without clocking the CPU; skips registers where a write has side effects. */
+  private rewriteReg(key: number, v: number): void {
+    if (key === 0x12 || key === 0x19 || key === 0x1e || key === 0x1f) return; // raster compare, IRQ acknowledge, collisions
+    if (key >= 0x400 && (key & 0x1f) >= 0x19) return; // SID read-only registers
+    this.writeIO(this.overrideAddr(key), v);
+    const o = this.overrides.get(key);
+    if (o) o.program = v; // keep the program's own value, not the merged one
+  }
+
   // ------------------------------------------------------------ breakpoints
   addBreakpoint(kind: Breakpoint['kind'], start: number, end = start, condition?: string, temporary = false): Breakpoint {
     const bp: Breakpoint = { id: this.nextBpId++, kind, start: start & 0xffff, end: end & 0xffff, enabled: true, condition, temporary, hits: 0 };
@@ -632,7 +725,7 @@ export class C64 implements CpuBus, VicMemory {
       for (let a = b.start; ; a = (a + 1) & 0xffff) { this.bpFlags[a] |= flag; if (a === b.end) break; }
     }
     this.watchActive = watch;
-    this.memHooks = watch || this.heat;
+    this.updateMemHooks();
     this.vic.onLine = this.rasterBreakLines.size ? (line) => {
       if (this.rasterBreakLines.has(line) && !this.stop) this.stop = { kind: 'raster', line };
     } : null;
@@ -716,6 +809,7 @@ export class C64 implements CpuBus, VicMemory {
       if (this.historyCount < this.historySize) this.historyCount++;
     }
     if (this.heatEnabled) this.heatExec[pc] = 255;
+    if (this.codeMap) this.codeMap[pc] = 1;
     cpu.step();
     if (cpu.lastWasInterrupt && this.breakOnIrq && !this.stop) this.stop = { kind: 'irq' };
     if (cpu.jammed && this.breakOnJam && !this.stop) { this.stop = { kind: 'jam', addr: cpu.pc }; return; }
@@ -740,13 +834,14 @@ export class C64 implements CpuBus, VicMemory {
     } else {
       // execOne without the debugger features that are switched off; at high
       // turbo speeds the per-instruction checks cost as much as the instruction
-      const cpu = this.cpu;
+      const cpu = this.cpu, code = this.codeMap;
       while (!vic.frameReady) {
         if (this.trapAt[cpu.pc] && this.kernalMapped) {
           const trap = this.trapMap.get(cpu.pc);
           if (trap && trap()) { if (this.stop) return this.stop; continue; }
         }
         const pc = cpu.pc;
+        if (code) code[pc] = 1;
         cpu.step();
         if (cpu.jammed && this.breakOnJam && !this.stop) this.stop = { kind: 'jam', addr: cpu.pc };
         if (this.drive.breakHit) { this.drive.breakHit = false; this.stop ??= { kind: 'drive-breakpoint', addr: this.drive.cpu.pc }; }

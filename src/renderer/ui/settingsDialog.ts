@@ -101,6 +101,9 @@ const renderers: Record<Page, (app: App, el: HTMLElement) => void | (() => void)
       field('Binary monitor', checkbox(app.settings.ui.binaryMonitor, 'Accept VICE binary monitor connections on 127.0.0.1:6502', (v) => {
         app.settings.ui.binaryMonitor = v; app.persist(); if (v) void app.startBinaryMonitor();
       }), 'Lets IDE debuggers and tools written for the VICE -binarymonitor option drive C64EMUL8R. Turning it off takes effect after a restart. The -binarymonitor command-line option starts it too.'),
+      field('Claude MCP link', checkbox(app.settings.ui.mcpLink, 'Let Claude look at and tweak the running machine', (v) => {
+        app.settings.ui.mcpLink = v; app.persist(); if (v) app.mcp.start(); else app.mcp.stop();
+      }), 'Connects to the c64-emul8r MCP bridge (tools/c64-mcp) on 127.0.0.1:5175. Claude can take screenshots, read the VIC / SID / sprites, override colours and instrument settings, edit the palette and sprites, and patch values. Every change shows a note and can be undone (Snapshot menu > Undo all Claude changes).'),
     );
   },
 

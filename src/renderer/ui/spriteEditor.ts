@@ -9,6 +9,8 @@ import {
   getPixel, readSpriteFile, setPixel, spritesToAsm, transformSprite, writeSpd,
 } from '../../core/sprites';
 import { btn, dropdown, h, hex2, hex4, menuItem, toast } from './dom';
+import { PaletteEditor } from './paletteEditor';
+import { type PickTarget, addPickTarget, raisePickTarget, removePickTarget } from './screenPick';
 
 const SLOT_NAMES = ['Background', 'Multicolour 1 ($D025)', 'Sprite colour', 'Multicolour 2 ($D026)'];
 const SLOT_SHORT = ['BG', 'MC1', 'Sprite', 'MC2'];
@@ -54,6 +56,12 @@ export function redoSprites(app: App): void {
 }
 
 // ------------------------------------------------------------- colour picker
+/** Close the open colour popup, if any (it also stops being the eyedropper target). */
+export function closeColourPopup(): void {
+  const p = document.querySelector('.cpop') as any;
+  if (p) { if (p.close) p.close(); else p.remove(); }
+}
+
 /** Swatch button that opens a 16-colour grid; null = "from the VIC register". */
 export function colourPicker(app: App, title: string, get: () => number | null, set: (v: number | null) => void, auto?: () => number): HTMLButtonElement {
   const b = h('button', { class: 'cpick', title });
@@ -65,19 +73,30 @@ export function colourPicker(app: App, title: string, get: () => number | null, 
   };
   b.addEventListener('click', (e) => {
     e.stopPropagation();
-    document.querySelector('.cpop')?.remove();
+    closeColourPopup();
     const pop = h('div', { class: 'cpop' });
     for (let i = 0; i < 16; i++) {
       pop.append(h('button', { class: 'cpop-sw' + (get() === i ? ' on' : ''), title: `${i} ${C64_COLOR_NAMES[i]}`, style: `background:${cssColour(app.video.palette[i])}`, onClick: () => { set(i); paint(); close(); } }));
     }
     if (auto) pop.append(h('button', { class: 'cpop-auto' + (get() === null ? ' on' : ''), onClick: () => { set(null); paint(); close(); } }, 'From VIC'));
+    pop.append(h('div', { class: 'cpop-hint' }, 'Alt+click the screen to pick · double-click the swatch to edit RGB'));
     const r = b.getBoundingClientRect();
     pop.style.left = `${Math.min(r.left, innerWidth - 120)}px`;
     pop.style.top = `${r.bottom + 4}px`;
-    const outside = (ev: MouseEvent) => { if (!pop.contains(ev.target as Node)) close(); };
-    const close = () => { pop.remove(); document.removeEventListener('mousedown', outside, true); };
+    // Alt+click is the eyedropper: it must not close the popup before the pick
+    const outside = (ev: MouseEvent) => { if (!ev.altKey && !pop.contains(ev.target as Node)) close(); };
+    const target: PickTarget = { pick: (c) => { set(c); paint(); close(); } };
+    const close = () => { pop.remove(); removePickTarget(target); document.removeEventListener('mousedown', outside, true); };
+    (pop as any).close = close;
+    addPickTarget(target);
     document.body.append(pop);
     setTimeout(() => document.addEventListener('mousedown', outside, true));
+  });
+  // double-click: edit this colour's RGB in the palette editor
+  b.addEventListener('dblclick', (e) => {
+    e.stopPropagation();
+    closeColourPopup();
+    PaletteEditor.open(app, (get() ?? auto?.() ?? 0) & 15);
   });
   (b as any).repaint = paint;
   paint();
@@ -253,6 +272,8 @@ export class SpriteEditor {
   private stroke: { before: Uint8Array; slot: number; last?: [number, number] } | null = null;
   private timer = 0;
   private clip: Uint8Array | null = null;
+  /** Alt+click on the screen: the colour under the mouse goes to the L pen's slot (R pen with the right button) */
+  private pickTarget: PickTarget = { pick: (c, right) => { this.cols[SLOT_KEYS[this.pen[right ? 1 : 0]]] = c; this.syncSlots(); this.draw(true); } };
 
   private constructor(private app: App) {
     this.cv = h('canvas', { width: SPR_W * CELL, height: SPR_H * CELL, class: 'se-grid' });
@@ -303,7 +324,7 @@ export class SpriteEditor {
     const side = h('div', { class: 'se-side' }, h('div', { class: 'hint' }, 'Pens'), slots, this.mini, tools, edit, io);
     this.el = h('div', { class: 'sprite-editor', tabindex: '-1' }, head,
       h('div', { class: 'se-body' }, nav, h('div', { class: 'se-main' }, this.cv, side), this.warn,
-        h('div', { class: 'hint' }, 'Left / right button paints with the L / R pen, straight into RAM. Saved snapshots keep the edits.')));
+        h('div', { class: 'hint' }, 'Left / right button paints with the L / R pen, straight into RAM. Saved snapshots keep the edits. Alt+click (right-click) the C64 screen to give the L (R) pen that colour; double-click a swatch to edit its RGB.')));
 
     this.cv.addEventListener('contextmenu', (e) => e.preventDefault());
     this.cv.addEventListener('pointerdown', (e) => {
@@ -339,6 +360,8 @@ export class SpriteEditor {
     // keep C64 keyboard out while the editor has focus (but let F-keys through)
     this.el.addEventListener('keydown', (e) => { if (!/^F\d+$/.test(e.key)) e.stopPropagation(); });
     this.el.addEventListener('keyup', (e) => { if (!/^F\d+$/.test(e.key)) e.stopPropagation(); });
+    this.el.addEventListener('focusin', () => raisePickTarget(this.pickTarget));
+    addPickTarget(this.pickTarget);
     document.body.append(this.el);
     this.timer = window.setInterval(() => this.draw(false), 100);
   }
@@ -457,7 +480,8 @@ export class SpriteEditor {
   close(): void {
     clearInterval(this.timer);
     this.el.remove();
-    document.querySelector('.cpop')?.remove();
+    closeColourPopup();
+    removePickTarget(this.pickTarget);
     if (SpriteEditor.inst === this) SpriteEditor.inst = null;
   }
 }

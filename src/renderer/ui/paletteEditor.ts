@@ -5,6 +5,7 @@
 import type { App } from '../app';
 import { C64_COLOR_NAMES, PALETTES, parseVpl } from '../../core/palettes';
 import { btn, h, toast } from './dom';
+import { type PickTarget, addPickTarget, raisePickTarget, removePickTarget } from './screenPick';
 
 const toRgb = (hex: string[]): number[] => hex.flatMap((c) => { const v = parseInt(c, 16); return [(v >> 16) & 255, (v >> 8) & 255, v & 255]; });
 const isHex = (s: string) => /^[0-9a-f]{6}$/i.test(s);
@@ -25,6 +26,12 @@ export class PaletteEditor {
     if (PaletteEditor.inst) PaletteEditor.inst.close();
     else PaletteEditor.inst = new PaletteEditor(app);
   }
+  /** Open (or bring up) the editor with colour `index` selected. */
+  static open(app: App, index: number): void {
+    if (!PaletteEditor.inst) PaletteEditor.inst = new PaletteEditor(app);
+    PaletteEditor.inst.select(index);
+    PaletteEditor.inst.el.focus();
+  }
 
   private el: HTMLElement;
   private sw: HTMLElement[] = [];
@@ -36,13 +43,17 @@ export class PaletteEditor {
   private status: HTMLElement;
   private shown = '';
   private timer = 0;
+  /** Alt+click on the screen selects the colour under the mouse */
+  private pickTarget: PickTarget = { pick: (c) => this.select(c) };
 
   private constructor(private app: App) {
     const head = h('div', { class: 'se-head' }, h('span', { class: 'se-title' }, 'Palette'), h('span', { class: 'tb-spacer' }),
       btn('', { icon: 'close', cls: 'small', title: 'Close (Esc)', onClick: () => this.close() }));
     const grid = h('div', { class: 'pe-grid' });
     for (let i = 0; i < 16; i++) {
-      const s = h('div', { class: 'pe-sw', title: `${i} ${C64_COLOR_NAMES[i]}`, onClick: () => { this.sel = i; this.paint(true); } }, h('span', {}, String(i)));
+      const s = h('div', { class: 'pe-sw', title: `${i} ${C64_COLOR_NAMES[i]}`, onClick: () => this.select(i) }, h('span', {}, String(i)));
+      // double-click: straight into the RGB colour chooser
+      s.addEventListener('dblclick', () => { this.select(i); try { this.picker.showPicker(); } catch { this.picker.click(); } });
       this.sw.push(s);
       grid.append(s);
     }
@@ -70,18 +81,22 @@ export class PaletteEditor {
       btn('Save .vpl…', { cls: 'small', icon: 'save', title: 'Save these colours as a VICE palette file', onClick: () => void this.save() }));
     this.el = h('div', { class: 'sprite-editor pal-editor', tabindex: -1 }, head,
       h('div', { class: 'se-body' }, grid, edit, resets, files, this.status,
-        h('div', { class: 'hint pe-hint' }, 'Changes show at once and are kept in snapshots. Screenshots and frame captures use these colours.')));
+        h('div', { class: 'hint pe-hint' }, 'Changes show at once and are kept in snapshots. Screenshots and frame captures use these colours. Alt+click the C64 screen to select the colour under the mouse; double-click a swatch to choose its RGB.')));
     this.dragBy(head);
     this.el.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { this.close(); e.preventDefault(); }
       if (!/^F\d+$/.test(e.key)) e.stopPropagation(); // keep the C64 keyboard out, F-keys still work
     });
     this.el.addEventListener('keyup', (e) => { if (!/^F\d+$/.test(e.key)) e.stopPropagation(); });
+    this.el.addEventListener('focusin', () => raisePickTarget(this.pickTarget));
+    addPickTarget(this.pickTarget);
     document.body.append(this.el);
     this.paint(true);
     // a program may change the palette too (Ultimate SET_PALETTE): follow it
     this.timer = window.setInterval(() => this.paint(false), 250);
   }
+
+  private select(i: number): void { this.sel = i & 15; this.paint(true); }
 
   private hex(): string[] { return this.app.screenPaletteHex(); }
 
@@ -150,6 +165,7 @@ export class PaletteEditor {
   close(): void {
     clearInterval(this.timer);
     this.el.remove();
+    removePickTarget(this.pickTarget);
     if (PaletteEditor.inst === this) PaletteEditor.inst = null;
   }
 }

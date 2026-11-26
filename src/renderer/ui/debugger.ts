@@ -459,6 +459,11 @@ export class DebuggerUI {
   // ----------------------------------------------------------------- VIC
   private renderVic(el: HTMLElement): void {
     this.els.vic = h('div', { class: 'panel-body' });
+    // double-click a colour swatch: edit its RGB in the palette editor
+    this.els.vic.addEventListener('dblclick', (e) => {
+      const sw = (e.target as HTMLElement).closest<HTMLElement>('.swatch[data-c]');
+      if (sw) PaletteEditor.open(this.app, Number(sw.dataset.c));
+    });
     const showSpr = h('label', { class: 'chk' }, h('input', { type: 'checkbox', 'data-vis': 'sprites', checked: this.app.c64.vic.showSprites, onChange: (e: Event) => this.app.setSpritesVisible((e.target as HTMLInputElement).checked) }), 'sprites');
     const showBg = h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: this.app.c64.vic.showBackground, onChange: (e: Event) => (this.app.c64.vic.showBackground = (e.target as HTMLInputElement).checked) }), 'graphics');
     const rl = h('input', { class: 'inp hex', placeholder: 'line' }) as HTMLInputElement;
@@ -474,7 +479,7 @@ export class DebuggerUI {
 
   private sw(i: number): string {
     const pal = this.app.palettes[this.app.settings.video.palette] ?? [];
-    return `<span class="swatch" style="background:#${pal[i & 15]}" title="${C64_COLOR_NAMES[i & 15]}"></span> ${i & 15}`;
+    return `<span class="swatch" data-c="${i & 15}" style="background:#${pal[i & 15]}" title="${C64_COLOR_NAMES[i & 15]} (double-click to edit its RGB)"></span> ${i & 15}`;
   }
 
   private updateVic(): void {

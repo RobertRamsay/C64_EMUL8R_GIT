@@ -6,6 +6,8 @@ import { C64, StopReason } from '../core/c64';
 import { C64_COLOR_NAMES, PALETTES, parseVpl } from '../core/palettes';
 import { cssColour } from './ui/spriteEditor';
 import { PaletteEditor } from './ui/paletteEditor';
+import { installScreenPick, picking } from './ui/screenPick';
+import { McpLink } from './mcp';
 import { engineInfo, slowExplanation, type EngineInfo } from './perf';
 import { attachMedia, detectMedia, parseSid, startSid, SidInfo, MEDIA_EXTENSIONS } from '../core/loaders';
 import { D64 } from '../core/d64';
@@ -81,6 +83,8 @@ export class App {
   /** the file last autostarted: REBOOT loads it again */
   private lastStart: { name: string; data: Uint8Array; path?: string } | null = null;
   binmon: BinaryMonitor | null = null;
+  /** Claude MCP link (off unless switched on in Settings) */
+  mcp = new McpLink(this);
   private binmonQueue: Promise<unknown> = Promise.resolve();
 
   async start(): Promise<void> {
@@ -107,9 +111,11 @@ export class App {
     this.applySettings();
     this.bindEvents();
     this.bindBeamScrub();
+    installScreenPick(this);
     await this.loadRoms();
     requestAnimationFrame(this.tick);
     if (this.settings.ui.binaryMonitor) void this.startBinaryMonitor();
+    if (this.settings.ui.mcpLink) this.mcp.start();
     this.handleLaunch(await window.host.args());
     window.host.onLaunchArgs((a) => this.handleLaunch(a));
     this.engineNotice();
@@ -343,6 +349,7 @@ export class App {
       h('hr'),
       menuItem('Save screenshot (PNG)…', () => this.screenshot(), '', 'camera'),
       menuItem(this.c64.uci.palette ? 'Palette editor… (edited)' : 'Palette editor…', () => PaletteEditor.toggle(this), '', 'settings'),
+      ...(this.mcp.linked || this.c64.overrides.size ? [menuItem('Undo all Claude changes (MCP)', () => { const n = this.mcp.undoAll(); toast(n ? `Undid ${n} Claude change${n > 1 ? 's' : ''}` : 'Claude has changed nothing'); }, '', 'undo')] : []),
       menuItem(this.frameCap ? `Stop frame capture (${this.frameCap.saved} saved)` : 'Quick frame capture (changed frames only)', () => void this.toggleFrameCapture(), 'Ctrl+F', 'camera'),
       menuItem('Frame capture folder…', () => void this.chooseFrameDir(), '', 'load'),
       menuItem(`${this.settings.ui.frameSkipMoved ? '\u2611' : '\u2610'} Skip frames where sprites only moved (sprites-only view)`, () => {
@@ -497,6 +504,8 @@ export class App {
     }
     if (this.ultimate.isOpen) { if (down) this.ultimate.onKey(e); e.preventDefault(); return; }
     if (this.isTyping(e)) return;
+    // Alt is the eyedropper while a colour is being edited: don't press C= on the C64 (key-up still goes through)
+    if (down && e.key === 'Alt' && picking()) { e.preventDefault(); return; }
     if (down) this.input.keyDown(e); else this.input.keyUp(e);
   }
 
