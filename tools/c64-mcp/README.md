@@ -49,7 +49,7 @@ While linked, the core records which addresses the CPU executes (`codeMap`), so
 writes over code are caught, operand bytes included. Code that hasn't run since
 the link started (a later level) is not known yet: the warnings say so.
 Every change has an id; `c64_undo` reverts the last one (or one and everything
-after it), and **Snapshot menu > Undo all Claude changes** reverts them all.
+after it), and **camera menu > Undo all Claude changes** reverts them all.
 
 ## Tools
 
