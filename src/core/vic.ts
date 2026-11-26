@@ -63,6 +63,18 @@ for (let n = 0; n < 16; n++) {
     mc[(n >> (k < 2 ? 2 : 0)) & 3][n] |= b;
   }
 }
+/** 8-bit pixel masks for gBuf[8..15] (bit p = pixel p from left): hires 0-bits and multicolour pairs 0..3 */
+const HIRES_BG = new Uint8Array(256);
+const MC0_M = new Uint8Array(256), MC1_M = new Uint8Array(256), MC2_M = new Uint8Array(256);
+for (let d = 0; d < 256; d++) {
+  for (let p = 0; p < 8; p++) {
+    if (!((d >> (7 - p)) & 1)) HIRES_BG[d] |= 1 << p;
+    const pair = (d >> (6 - (p & ~1))) & 3;
+    if (pair === 0) MC0_M[d] |= 1 << p;
+    else if (pair === 1) MC1_M[d] |= 1 << p;
+    else if (pair === 2) MC2_M[d] |= 1 << p;
+  }
+}
 /** idle state: foreground pixels lose their colour (black), keeping FG */
 function blackFg(w: number): number {
   const fg = w & 0x10101010;
@@ -85,6 +97,8 @@ export class VICII {
   denLatched = false;
   ba = false;
   private baLowCycles = 0;
+  private baPrevCycle = false;
+  private baLowCyclesPrev = 0;
   irqFlags = 0;
   irqOut = false;
   rasterCompare = 0;
@@ -100,6 +114,9 @@ export class VICII {
   private spMc = new Uint8Array(8);
   private spMcBase = new Uint8Array(8);
   private spExpFF = new Uint8Array(8).fill(1);
+  private spCrunched = 0;
+  /** XSCROLL when the last display column was output (its tail follows in the next cycle) */
+  private xsLast = 0;
   private spData = new Uint8Array(24);
   private spFetched = new Uint8Array(8);
   // sprite line output: data latched once this line's fetches are done, then
@@ -130,6 +147,8 @@ export class VICII {
   /** graphics decode pipeline: bytes 0..7 the previous column, 8..15 the current one */
   private gBuf = new Uint8Array(16);
   private gBuf32 = new Uint32Array(this.gBuf.buffer);
+  /** 16-bit masks of pixels in gBuf[0..15] sourced from $D021..$D024 (live mid-line updates) */
+  private m21 = 0; private m22 = 0; private m23 = 0; private m24 = 0;
   // per line buffers (index = x + 8)
   /** background/foreground pixels, sprites drawn over them */
   private lineColor = new Uint8Array(SCREEN_W);
@@ -203,10 +222,12 @@ export class VICII {
     this.raster = 0; this.cycle = 1;
     this.vc = this.vcBase = this.rc = this.vmli = 0;
     this.displayState = false; this.badline = false; this.ba = false;
+    this.baLowCycles = 0; this.baPrevCycle = false; this.baLowCyclesPrev = 0;
     this.irqFlags = 0; this.setIrq(false);
     this.rasterCompare = 0;
     this.spDma.fill(0); this.spDisplay.fill(0); this.spExpFF.fill(1);
-    this.spDmaBits = 0;
+    this.spDmaBits = 0; this.spCrunched = 0;
+    this.m21 = this.m22 = this.m23 = this.m24 = 0;
     this.spSpriteColl = this.spBgColl = 0;
   }
 
@@ -254,7 +275,7 @@ export class VICII {
     this.regs[reg] = v;
     if (reg < 0x10) {
       const n = reg >> 1;
-      if (reg & 1) this.spY[n] = v; else this.spX[n] = (this.spX[n] & 0x100) | v;
+      if (reg & 1) { this.spY[n] = v; this.updateBA(); } else this.spX[n] = (this.spX[n] & 0x100) | v;
       return;
     }
     switch (reg) {
@@ -267,14 +288,21 @@ export class VICII {
         this.rasterCompare = (this.regs[0x12]) | ((this.regs[0x11] & 0x80) << 1);
         if (this.raster === 0x30 && (this.regs[0x11] & 0x10)) this.denLatched = true;
         this.updateBadline();
+        if (reg === 0x11) this.updateBA();
         // the IRQ fires when raster and compare *become* equal: moving the compare
         // onto the current line triggers it, rewriting $D011/$D012 with the same
         // compare (e.g. setting YSCROLL inside the raster IRQ) does not
         if (this.rasterCompare !== prev && this.raster === this.rasterCompare) this.raiseIrq(0x01);
         break;
       }
+      case 0x15:
+        this.updateBA();
+        break;
       case 0x17:
-        for (let i = 0; i < 8; i++) if (!(v & (1 << i))) this.spExpFF[i] = 1;
+        for (let i = 0; i < 8; i++) if (!(v & (1 << i))) {
+          if (this.cycle === 16 && !this.spExpFF[i]) this.spCrunched |= 1 << i;
+          this.spExpFF[i] = 1;
+        }
         break;
       case 0x19:
         this.irqFlags &= ~v & 0x0f;
@@ -283,6 +311,21 @@ export class VICII {
       case 0x1a:
         this.updateIrq();
         break;
+      case 0x21: this.patchGBuf(this.m21, this.bg0); break;
+      case 0x22: this.patchGBuf(this.m22, v & 15); break;
+      case 0x23: this.patchGBuf(this.m23, v & 15); break;
+      case 0x24: this.patchGBuf(this.m24, v & 15); break;
+    }
+  }
+
+  private patchGBuf(mask: number, col: number): void {
+    if (!mask) return;
+    const g = this.gBuf;
+    while (mask) {
+      const bit = mask & -mask;
+      mask ^= bit;
+      const p = 31 - Math.clz32(bit);
+      g[p] = (g[p] & FG) | col;
     }
   }
 
@@ -304,6 +347,12 @@ export class VICII {
       for (let i = 0; i < 8; i++) if (en & (1 << i) && this.spY[i] === y) dma |= 1 << i;
     }
     return (this.badline && c >= 12 && c <= 54) || (dma & this.baSprites[c]) !== 0;
+  }
+
+  private updateBA(): void {
+    const ba = this.computeBA(this.cycle);
+    this.ba = ba;
+    this.baLowCycles = ba ? (this.baPrevCycle ? this.baLowCyclesPrev + 1 : 0) : 0;
   }
 
   // ---- main clock ----
@@ -364,13 +413,21 @@ export class VICII {
       case 15:
         for (let i = 0; i < 8; i++) if (this.spExpFF[i]) this.spMcBase[i] = (this.spMcBase[i] + 2) & 0x3f;
         break;
-      case 16:
+      case 16: {
+        const cr = this.spCrunched;
+        this.spCrunched = 0;
         for (let i = 0; i < 8; i++) {
-          if (this.spExpFF[i]) this.spMcBase[i] = (this.spMcBase[i] + 1) & 0x3f;
+          if (cr & (1 << i)) {
+            const mb = this.spMcBase[i], mc = this.spMc[i];
+            this.spMcBase[i] = ((0x2a & mb & mc) | (0x15 & (mb | mc))) & 0x3f;
+          } else if (this.spExpFF[i]) {
+            this.spMcBase[i] = (this.spMcBase[i] + 1) & 0x3f;
+          }
           if (this.spMcBase[i] === 63) { this.spDma[i] = 0; this.spDisplay[i] = 0; }
         }
         this.updateDmaBits();
         break;
+      }
       case 55:
       case 56: {
         const en = this.regs[0x15];
@@ -395,39 +452,37 @@ export class VICII {
         break;
     }
 
-    // c-accesses (video matrix) in cycles 15..54 on badlines
-    if (this.badline && c >= 15 && c <= 54) {
-      const col = c - 15;
-      if (this.baLowCycles < 3) {
-        // CPU still owns the bus for 3 cycles after BA went low: VIC reads $FF
-        this.mxChar[col] = 0xff;
-        this.mxColor[col] = this.mem.colorRam[(this.vcBase + col) & 0x3ff] & 0x0f;
-      } else {
-        const vmBase = (this.regs[0x18] & 0xf0) << 6;
-        const addr = (this.vcBase + col) & 0x3ff; // VC (= VCBASE at cycle 14) + column
-        this.mxChar[col] = this.mem.vicRead(vmBase | addr);
-        this.mxColor[col] = this.mem.colorRam[addr] & 0x0f;
-      }
-    }
-
-    // g-accesses in cycles 16..55
+    // g-accesses (phi1) in cycles 16..55
     if (c >= 16 && c <= 55) this.gAccess(c - 16);
     else if (c === 56) this.decodeBlank(); // column after last: background
 
-    // BA for next cycle
-    let next = c + 1;
-    if (next > m.cyclesPerLine) next = 1;
-    const prevBa = this.ba;
-    this.ba = this.computeBA(next);
-    this.baLowCycles = this.ba ? (prevBa ? this.baLowCycles + 1 : 0) : 0;
+    // c-accesses (phi2, video matrix) in cycles 15..54 on badlines
+    if (this.badline && c >= 15 && c <= 54) {
+      const vi = this.vmli;
+      if (vi < 40) {
+        const addr = this.vc & 0x3ff;
+        if (this.baLowCycles < 3) {
+          // CPU still owns the bus for 3 cycles after BA went low: VIC reads $FF
+          this.mxChar[vi] = 0xff;
+          this.mxColor[vi] = this.mem.colorRam[addr] & 0x0f;
+        } else {
+          const vmBase = (this.regs[0x18] & 0xf0) << 6;
+          this.mxChar[vi] = this.mem.vicRead(vmBase | addr);
+          this.mxColor[vi] = this.mem.colorRam[addr] & 0x0f;
+        }
+      }
+    }
 
-    // end of line
+    // end of line & BA for next cycle
+    this.baPrevCycle = this.ba;
+    this.baLowCyclesPrev = this.baLowCycles;
     if (c === m.cyclesPerLine) {
       this.cycle = 1;
       this.lineEnd = true;
     } else {
       this.cycle = c + 1;
     }
+    this.updateBA();
   }
 
   /** line of the next cycle to run (raster steps at its start); with `cycle`, the beam position */
@@ -479,12 +534,14 @@ export class VICII {
   private shiftColumns(): void {
     const g = this.gBuf32;
     g[0] = g[2]; g[1] = g[3];
+    this.m21 >>>= 8; this.m22 >>>= 8; this.m23 >>>= 8; this.m24 >>>= 8;
   }
 
   private decodeBlank(): void {
     this.shiftColumns();
     const bg = this.bg0 * REP;
     this.gBuf32[2] = bg; this.gBuf32[3] = bg;
+    this.m21 |= 0xff00;
   }
 
   /** g-access for display column `col` and decode it into 8 pixels. */
@@ -516,14 +573,23 @@ export class VICII {
     let w0: number, w1: number;
     let on = -1, off = 0, c0 = 0, c1 = 0, c2 = 0, c3 = 0;
     switch ((ecm ? 4 : 0) | (bmm ? 2 : 0) | (mcm ? 1 : 0)) {
-      case 0: on = color; off = b0; break; // standard text
+      case 0: on = color; off = b0; this.m21 |= HIRES_BG[data] << 8; break; // standard text
       case 1: // multicolour text
-        if (color & 8) { c0 = b0; c1 = this.regs[0x22] & 15; c2 = this.regs[0x23] & 15; c3 = color & 7; }
-        else { on = color; off = b0; }
+        if (color & 8) {
+          c0 = b0; c1 = this.regs[0x22] & 15; c2 = this.regs[0x23] & 15; c3 = color & 7;
+          this.m21 |= MC0_M[data] << 8; this.m22 |= MC1_M[data] << 8; this.m23 |= MC2_M[data] << 8;
+        } else { on = color; off = b0; this.m21 |= HIRES_BG[data] << 8; }
         break;
       case 2: on = ch >> 4; off = ch & 15; break; // standard bitmap
-      case 3: c0 = b0; c1 = ch >> 4; c2 = ch & 15; c3 = color; break; // multicolour bitmap
-      case 4: on = color; off = ch >> 6 ? this.regs[0x21 + (ch >> 6)] & 15 : b0; break; // ECM text
+      case 3: c0 = b0; c1 = ch >> 4; c2 = ch & 15; c3 = color; this.m21 |= MC0_M[data] << 8; break; // multicolour bitmap
+      case 4: { // ECM text
+        on = color;
+        const sel = ch >> 6;
+        off = sel ? this.regs[0x21 + sel] & 15 : b0;
+        const m = HIRES_BG[data] << 8;
+        if (sel === 0) this.m21 |= m; else if (sel === 1) this.m22 |= m; else if (sel === 2) this.m23 |= m; else this.m24 |= m;
+        break;
+      }
       // invalid modes: black, but foreground still detected for collisions
       case 5: if (!(color & 8)) { on = 0; off = 0; } break;
       case 6: on = 0; off = 0; break;
@@ -609,11 +675,15 @@ export class VICII {
   /** Background pixels of one cycle and the border flip-flops; returns the border coverage (see renderCycle). */
   private renderBackground(c: number, x0: number, visibleLine: boolean, r11: number, top: number, bottom: number, left: number, right: number): number {
     const raster = this.raster;
-    const xs = this.regs[0x16] & 7;
+    const gc = c - 17; // column whose pixels start in this cycle
+    // the tail of the last column keeps the delay it was loaded with: raising
+    // XSCROLL after it (side border tricks at cycle 56/57) must not re-show pixels
+    const xsNow = this.regs[0x16] & 7;
+    const xs = gc === 40 ? this.xsLast : xsNow;
+    if (gc === 39) this.xsLast = xsNow;
     const borderCol = this.regs[0x20] & 15;
     const bg0 = this.bg0;
     const lc = this.lineColor, lb = this.lineBorder;
-    const gc = c - 17; // column whose pixels start in this cycle
     const base = x0 + 8;
     if (((left - x0) >>> 0) > 7 && ((right - x0) >>> 0) > 7) {
       // the border flip-flops don't change within these 8 pixels
@@ -750,7 +820,8 @@ export class VICII {
       irqFlags: this.irqFlags, rasterCompare: this.rasterCompare, mxChar: Array.from(this.mxChar), mxColor: Array.from(this.mxColor),
       spDma: Array.from(this.spDma), spDisplay: Array.from(this.spDisplay), spMc: Array.from(this.spMc), spMcBase: Array.from(this.spMcBase),
       spExpFF: Array.from(this.spExpFF), spData: Array.from(this.spData), spFetched: Array.from(this.spFetched),
-      spSpriteColl: this.spSpriteColl, spBgColl: this.spBgColl, mainBorder: this.mainBorder, vertBorder: this.vertBorder, ba: this.ba, lineEnd: this.lineEnd,
+      spSpriteColl: this.spSpriteColl, spBgColl: this.spBgColl, mainBorder: this.mainBorder, vertBorder: this.vertBorder, ba: this.ba,
+      baLowCycles: this.baLowCycles, baPrevCycle: this.baPrevCycle, baLowCyclesPrev: this.baLowCyclesPrev, lineEnd: this.lineEnd,
     };
   }
   loadState(s: any): void {
@@ -760,7 +831,9 @@ export class VICII {
     this.mxChar.set(s.mxChar); this.mxColor.set(s.mxColor); this.spDma.set(s.spDma); this.spDisplay.set(s.spDisplay);
     this.updateDmaBits();
     this.spMc.set(s.spMc); this.spMcBase.set(s.spMcBase); this.spExpFF.set(s.spExpFF); this.spData.set(s.spData); this.spFetched.set(s.spFetched);
-    this.spSpriteColl = s.spSpriteColl; this.spBgColl = s.spBgColl; this.mainBorder = s.mainBorder; this.vertBorder = s.vertBorder; this.ba = s.ba; this.lineEnd = !!s.lineEnd;
+    this.spSpriteColl = s.spSpriteColl; this.spBgColl = s.spBgColl; this.mainBorder = s.mainBorder; this.vertBorder = s.vertBorder;
+    this.ba = s.ba; this.baLowCycles = s.baLowCycles ?? 0; this.baPrevCycle = !!s.baPrevCycle; this.baLowCyclesPrev = s.baLowCyclesPrev ?? 0;
+    this.lineEnd = !!s.lineEnd;
     this.updateBadline();
     this.updateIrq();
   }

@@ -96,7 +96,7 @@ const renderers: Record<Page, (app: App, el: HTMLElement) => void | (() => void)
       field('Second SID model', select(m.sid2Model, [['6581', '6581'], ['8580', '8580']], (v) => { m.sid2Model = v; reconfig(); })),
       field('1541 drive mode', select(m.trueDrive ? 'true' : 'fast', [['true', 'True drive emulation (most compatible)'], ['fast', 'Fast virtual drive (instant LOAD/SAVE)']], (v) => { m.trueDrive = v === 'true'; reconfig(); }),
         'True drive emulation runs the real 1541 DOS and supports fast loaders. The fast virtual drive traps KERNAL LOAD/SAVE and loads instantly but only works with standard loaders.'),
-      field('Auto warp', checkbox(m.autoWarp, 'Run at full speed while the 1541 or datasette motor is on', (v) => { m.autoWarp = v; app.persist(); }),
+      field('Auto warp', checkbox(m.autoWarp, 'Run at full speed during plain KERNAL disk loads (not demo/game loaders) and while the datasette motor is on', (v) => { m.autoWarp = v; app.persist(); }),
         'Loading (including in-game multi-loads) runs as fast as your PC allows; sound and normal speed return when the drive stops.'),
       field('Binary monitor', checkbox(app.settings.ui.binaryMonitor, 'Accept VICE binary monitor connections on 127.0.0.1:6502', (v) => {
         app.settings.ui.binaryMonitor = v; app.persist(); if (v) void app.startBinaryMonitor();

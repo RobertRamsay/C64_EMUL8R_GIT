@@ -814,14 +814,15 @@ export class App {
     this.debugger.log(`Binary monitor listening on ${address}`);
   }
 
-  /** Warp while requested, while autostart loads, or (auto warp) while a drive/tape motor runs. */
+  /** Warp while requested, while autostart loads, or (auto warp) during a KERNAL disk load or while the tape motor runs. */
   private driveIdleFrames = 99;
   warpActive = false;
   isWarping(): boolean {
     if (this.warp || this.c64.autostartWarp) return true;
     if (!this.settings.machine.autoWarp) return false;
     const d = this.c64.drive, t = this.c64.tape;
-    const busy = (d.enabled && d.motor) || (t.playing && t.motor);
+    // disk: only plain KERNAL loads; a demo's own loader keeps the motor on while its parts play
+    const busy = (d.enabled && d.motor && this.c64.kernalDiskLoad) || (t.playing && t.motor);
     // short hold-over so stop/start of the motor between files doesn't flicker
     this.driveIdleFrames = busy ? 0 : this.driveIdleFrames + 1;
     return this.driveIdleFrames < 10;

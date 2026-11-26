@@ -371,6 +371,14 @@ export class C64 implements CpuBus, VicMemory {
   }
 
   get kernalMapped(): boolean { return this.readMap[0xf] === M_KERNAL; }
+  /**
+   * Last frame: the 1541 motor ran while the CPU was mostly in KERNAL ROM, i.e. a
+   * plain LOAD. Demo/game loaders run from RAM, often with music and effects going,
+   * so auto warp keys off this rather than the motor alone.
+   */
+  kernalDiskLoad = false;
+  private loadSamples = 0;
+  private kernalLoadSamples = 0;
 
   // VIC memory interface
   vicAbs(addr: number): number {
@@ -409,6 +417,10 @@ export class C64 implements CpuBus, VicMemory {
     if (this.drive.enabled) {
       this.driveTarget += this.driveRatio;
       if (this.drive.clock < this.driveTarget) this.drive.runTo(this.driveTarget);
+      if ((this.cycles & 63) === 0 && this.drive.motor) {
+        this.loadSamples++;
+        if (this.cpu.pc >= 0xe000 && this.kernalMapped) this.kernalLoadSamples++;
+      }
     }
     if (this.tape.playing) {
       this.tape.motor = !(this.cpuPortData & this.cpuPortDir & 0x20);
@@ -939,6 +951,8 @@ export class C64 implements CpuBus, VicMemory {
 
   private endOfFrame(): void {
     this.frameCount++;
+    this.kernalDiskLoad = this.kernalLoadSamples * 2 > this.loadSamples;
+    this.loadSamples = this.kernalLoadSamples = 0;
     this.syncSid();
     this.processTyping();
     this.processAutostart();
