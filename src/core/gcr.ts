@@ -4,6 +4,8 @@ export const SECTORS_PER_TRACK = (t: number): number => (t <= 17 ? 21 : t <= 24 
 export const SPEED_ZONE = (t: number): number => (t <= 17 ? 3 : t <= 24 ? 2 : t <= 30 ? 1 : 0);
 /** raw GCR bytes per track for each speed zone */
 export const TRACK_SIZE = [6250, 6666, 7142, 7692];
+/** 0x55 gap after each sector per speed zone, as the 1541's FORMAT leaves it (VICE uses the same) */
+const SECTOR_GAP = [9, 12, 17, 8];
 
 const GCR_ENC = [0x0a, 0x0b, 0x12, 0x13, 0x0e, 0x0f, 0x16, 0x17, 0x09, 0x19, 0x1a, 0x1b, 0x0d, 0x1d, 0x1e, 0x15];
 const GCR_DEC = new Int8Array(32).fill(-1);
@@ -46,6 +48,11 @@ export function d64ToGcr(d64: Uint8Array): GcrDisk {
   const id1 = d64[bam + 0xa2], id2 = d64[bam + 0xa3];
   const tracks: Uint8Array[] = [];
   for (let ht = 0; ht <= 84; ht++) tracks.push(new Uint8Array(0));
+  // Sectors follow each other with the per-zone gap of a 1541-formatted disk; the
+  // spare bytes end up after the last sector. Each track is also turned against the
+  // one before (track skew), so after a step the next track's sectors arrive at the
+  // same moment as on a real disk: fast loaders' timing depends on both.
+  let skew = 0;
   for (let t = 1; t <= trackCount; t++) {
     const size = TRACK_SIZE[SPEED_ZONE(t)];
     const buf = new Uint8Array(size).fill(0x55);
@@ -53,9 +60,7 @@ export function d64ToGcr(d64: Uint8Array): GcrDisk {
     const base = d64TrackOffset(t);
     let pos = 0;
     const put = (bytes: number[]) => { for (const b of bytes) buf[pos++ % size] = b; };
-    // distribute the remaining space as inter-sector gaps
-    const sectorLen = 5 + 10 + 9 + 5 + 325;
-    const gap = Math.max(4, Math.floor((size - nsec * sectorLen) / nsec));
+    const gap = SECTOR_GAP[SPEED_ZONE(t)];
     for (let s = 0; s < nsec; s++) {
       const off = base + s * 256;
       const header = [0x08, (s ^ t ^ id2 ^ id1) & 0xff, s, t, id2, id1, 0x0f, 0x0f];
@@ -70,7 +75,11 @@ export function d64ToGcr(d64: Uint8Array): GcrDisk {
       put(encodeBlock(data));
       put(new Array(gap).fill(0x55));
     }
-    tracks[t * 2] = buf;
+    // same skew as VICE's D64 conversion (fitted to real disks), so loads take as long
+    skew = (skew + pos - gap + Math.floor((size * 100) / 270)) % size;
+    const turned = new Uint8Array(size);
+    for (let i = 0; i < size; i++) turned[(i + skew) % size] = buf[i];
+    tracks[t * 2] = turned;
   }
   return { tracks, trackCount, id: [id1, id2], writeProtect: false, dirty: false };
 }

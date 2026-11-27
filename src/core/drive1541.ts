@@ -32,6 +32,8 @@ export class Drive1541 implements CpuBus {
   diskName = '';
   originalD64: Uint8Array | null = null;
   private headPos = 0;
+  /** track length headPos counts in: rescaled when the head moves to a track of another length */
+  private headLen = 0;
   private byteCycles = 0;
   private prevByte = 0;
   private sync = false;
@@ -105,7 +107,7 @@ export class Drive1541 implements CpuBus {
     this.disk = isG64 ? g64ToGcr(data) : d64ToGcr(data);
     this.originalD64 = isG64 ? null : data.slice();
     this.diskName = name;
-    this.headPos = 0;
+    this.headPos = 0; this.headLen = 0;
   }
   ejectDisk(): void { this.disk = null; this.diskName = ''; this.originalD64 = null; }
 
@@ -194,7 +196,14 @@ export class Drive1541 implements CpuBus {
     if (++this.byteCycles < period) return;
     this.byteCycles = 0;
     const tr = this.disk.tracks[this.halfTrack];
-    if (!tr || tr.length === 0) { this.sync = false; this.latchedByte = 0; return; }
+    // the disk keeps turning under the head: over an empty (half) track too, and
+    // a step to a track of another length keeps the angle, not the byte index
+    const len = tr && tr.length ? tr.length : Math.round(200000 / period);
+    if (len !== this.headLen) {
+      if (this.headLen) this.headPos = Math.floor((this.headPos * len) / this.headLen) % len;
+      this.headLen = len;
+    }
+    if (!tr || tr.length === 0) { this.sync = false; this.latchedByte = 0; this.headPos = (this.headPos + 1) % len; return; }
     const pos = this.headPos % tr.length;
     if (this.writeMode) {
       const via = this.via2;
@@ -235,12 +244,12 @@ export class Drive1541 implements CpuBus {
     this.syncVias();
     return {
       ram: Array.from(this.ram), cpu: this.cpu.getState(), via1: this.via1.saveState(), via2: this.via2.saveState(),
-      clock: this.clock, halfTrack: this.halfTrack, stepPhase: this.stepPhase, headPos: this.headPos, motor: this.motor, led: this.led,
+      clock: this.clock, halfTrack: this.halfTrack, stepPhase: this.stepPhase, headPos: this.headPos, headLen: this.headLen, motor: this.motor, led: this.led,
     };
   }
   loadState(s: any): void {
     this.ram.set(s.ram); this.cpu.setState(s.cpu); this.via1.loadState(s.via1); this.via2.loadState(s.via2);
-    this.clock = s.clock; this.halfTrack = s.halfTrack; this.stepPhase = s.stepPhase; this.headPos = s.headPos;
+    this.clock = s.clock; this.halfTrack = s.halfTrack; this.stepPhase = s.stepPhase; this.headPos = s.headPos; this.headLen = s.headLen ?? 0;
     this.motor = s.motor; this.led = s.led;
     this.viaAt = this.clock; this.syncVias();
   }
