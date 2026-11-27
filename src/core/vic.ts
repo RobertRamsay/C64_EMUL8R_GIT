@@ -149,6 +149,10 @@ export class VICII {
   private gBuf32 = new Uint32Array(this.gBuf.buffer);
   /** 16-bit masks of pixels in gBuf[0..15] sourced from $D021..$D024 (live mid-line updates) */
   private m21 = 0; private m22 = 0; private m23 = 0; private m24 = 0;
+  /** the 8 pixels drawn in the last cycle: line index of the first (-1: none drawn), framebuffer row */
+  private spanBase = -1; private spanRow = 0; private spanX = 0;
+  /** bit p: pixel p of that span came from $D021..$D024 / was drawn by a sprite */
+  private spanM21 = 0; private spanM22 = 0; private spanM23 = 0; private spanM24 = 0; private spanSpr = 0;
   // per line buffers (index = x + 8)
   /** background/foreground pixels, sprites drawn over them */
   private lineColor = new Uint8Array(SCREEN_W);
@@ -311,10 +315,33 @@ export class VICII {
       case 0x1a:
         this.updateIrq();
         break;
-      case 0x21: this.patchGBuf(this.m21, this.bg0); break;
-      case 0x22: this.patchGBuf(this.m22, v & 15); break;
-      case 0x23: this.patchGBuf(this.m23, v & 15); break;
-      case 0x24: this.patchGBuf(this.m24, v & 15); break;
+      case 0x20: this.patchSpan(-1, v & 15); break;
+      case 0x21: this.patchGBuf(this.m21, this.bg0); this.patchSpan(this.spanM21, this.bg0); break;
+      case 0x22: this.patchGBuf(this.m22, v & 15); this.patchSpan(this.spanM22, v & 15); break;
+      case 0x23: this.patchGBuf(this.m23, v & 15); this.patchSpan(this.spanM23, v & 15); break;
+      case 0x24: this.patchGBuf(this.m24, v & 15); this.patchSpan(this.spanM24, v & 15); break;
+    }
+  }
+
+  /**
+   * A colour register written in a cycle already shows in that cycle's 8 pixels
+   * from the second one on (6569/6567: one pixel of colour latency), but this
+   * cycle was drawn before the CPU's write: recolour pixels 1..7 that came from
+   * the register (`mask`; -1 = the border) and that no sprite covers.
+   */
+  private patchSpan(mask: number, col: number): void {
+    if (this.spanBase < 0) return;
+    const lc = this.lineColor, lb = this.lineBorder, fb = this.framebuffer, row = this.spanRow;
+    for (let p = 1; p < 8; p++) {
+      const idx = this.spanBase + p;
+      if (mask < 0) {
+        if (lb[idx] === 0xff) continue;
+        lb[idx] = col;
+      } else {
+        if (!((mask >> p) & 1) || ((this.spanSpr >> p) & 1) || lb[idx] !== 0xff) continue;
+        lc[idx] = (lc[idx] & FG) | col;
+      }
+      fb[row + idx] = col;
     }
   }
 
@@ -612,6 +639,7 @@ export class VICII {
   }
 
   private renderCycle(c: number): void {
+    this.spanBase = -1;
     // cycles 1..10: nothing is drawn, no border comparison, sprites not yet loaded
     if (c < SPRITE_START_CYCLE) return;
     const m = this.model;
@@ -642,6 +670,7 @@ export class VICII {
       return;
     }
     const inWindow = c >= FIRST_VIS_CYCLE && c <= LAST_VIS_CYCLE;
+    this.spanSpr = 0; this.spanX = x0 + 8;
     // border over these 8 pixels: 1 all, 0 none, -1 changes within them
     const border = inWindow ? this.renderBackground(c, x0, visibleLine, r11, top, bottom, left, right) : 0;
     // sprites are shifted out across the whole line, hidden parts included, so
@@ -670,6 +699,7 @@ export class VICII {
       const fb = this.framebuffer, lc = this.lineColor, lb = this.lineBorder;
       for (let i = base; i < base + 8; i++) fb[row + i] = lb[i] !== 0xff ? lb[i] : lc[i] & 15;
     }
+    this.spanBase = base; this.spanRow = row;
   }
 
   /** Background pixels of one cycle and the border flip-flops; returns the border coverage (see renderCycle). */
@@ -681,6 +711,20 @@ export class VICII {
     const xsNow = this.regs[0x16] & 7;
     const xs = gc === 40 ? this.xsLast : xsNow;
     if (gc === 39) this.xsLast = xsNow;
+    if (visibleLine) {
+      // which of these 8 pixels come from $D021..$D024 (for a write later in this cycle)
+      if (gc >= 0 && gc < 40) {
+        const s = 8 - xs;
+        this.spanM21 = (this.m21 >>> s) & 0xff; this.spanM22 = (this.m22 >>> s) & 0xff;
+        this.spanM23 = (this.m23 >>> s) & 0xff; this.spanM24 = (this.m24 >>> s) & 0xff;
+      } else if (gc === 40) {
+        const s = 8 - xs, low = (1 << xs) - 1;
+        this.spanM21 = ((this.m21 >>> s) & low) | (0xff & ~low); this.spanM22 = (this.m22 >>> s) & low;
+        this.spanM23 = (this.m23 >>> s) & low; this.spanM24 = (this.m24 >>> s) & low;
+      } else {
+        this.spanM21 = 0xff; this.spanM22 = this.spanM23 = this.spanM24 = 0;
+      }
+    }
     const borderCol = this.regs[0x20] & 15;
     const bg0 = this.bg0;
     const lc = this.lineColor, lb = this.lineBorder;
@@ -803,6 +847,8 @@ export class VICII {
     if (this.spritesOnly) { this.lineSpr[idx] = firstCol; return; }
     if (!this.showSprites || (fg && r[0x1b] & (1 << first))) return;
     this.lineColor[idx] = firstCol;
+    const rel = idx - this.spanX;
+    if (rel >= 0 && rel < 8) this.spanSpr |= 1 << rel;
   }
 
   // ---- debugger helpers ----
