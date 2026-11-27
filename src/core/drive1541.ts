@@ -191,7 +191,16 @@ export class Drive1541 implements CpuBus {
   }
 
   private rotate(): void {
-    if (!this.motor || !this.disk) return;
+    if (!this.disk) return;
+    if (!this.motor) {
+      // motor off: nothing is read, but the disk's angle keeps moving on (as in VICE,
+      // which catches the rotation up by the elapsed time when the motor restarts), so
+      // the next load doesn't find its sector waiting right under the head
+      const tr = this.disk.tracks[this.halfTrack];
+      const len = this.headLen || (tr && tr.length) || 7692;
+      if (++this.byteCycles >= Math.round(200000 / len)) { this.byteCycles = 0; this.headPos = (this.headPos + 1) % len; }
+      return;
+    }
     const period = 32 - this.density * 2;
     if (++this.byteCycles < period) return;
     this.byteCycles = 0;
